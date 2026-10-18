@@ -2935,6 +2935,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: __Door__
       objectReference: {fileID: 0}
+    - target: {fileID: 2927207506600053558, guid: 5a958ebfe31d0fc4b83c92e6fe59e836, type: 3}
+      propertyPath: nextSceneName
+      value: Level_05
+      objectReference: {fileID: 0}
     - target: {fileID: 5667876503461560799, guid: 5a958ebfe31d0fc4b83c92e6fe59e836, type: 3}
       propertyPath: GlobalObjectIdHash
       value: 2508429372

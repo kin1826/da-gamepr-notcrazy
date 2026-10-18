@@ -29,6 +29,7 @@ public class PlayerMovement : NetworkBehaviour
 
     private Rigidbody2D rb;
     private Vector2 moveInput;
+    private Vector2 rawMoveInput;
     private bool isGrounded;
     private bool lastRunning;
     private int lastFacingSign = 1;
@@ -80,7 +81,7 @@ public class PlayerMovement : NetworkBehaviour
     {
         if (!HasLocalControl()) return;
 
-        if (value.isPressed && isGrounded && rb != null)
+        if (value.isPressed && rb != null && (isGrounded || FlappyJumpModifier.IsActive))
         {
             Jump();
         }
@@ -111,7 +112,7 @@ public class PlayerMovement : NetworkBehaviour
     {
         if (!HasLocalControl()) return;
 
-        if (isGrounded && rb != null)
+        if (rb != null && (isGrounded || FlappyJumpModifier.IsActive))
         {
             Jump();
         }
@@ -119,23 +120,36 @@ public class PlayerMovement : NetworkBehaviour
 
     private void SetMoveInput(Vector2 input)
     {
+        rawMoveInput = input;
+        ApplyMovementModifier();
+    }
+
+    private void ApplyMovementModifier()
+    {
+        moveInput = rawMoveInput;
+
         if (IsHorizontalInputInverted)
         {
-            input.x = -input.x;
+            moveInput.x = -moveInput.x;
         }
-
-        moveInput = input;
     }
 
     public static void SetHorizontalInputInverted(bool inverted)
     {
         IsHorizontalInputInverted = inverted;
+        LocalPlayer?.ApplyMovementModifier();
     }
 
     private void Jump()
     {
         if (IsMultiplayer() && !IsOwner) return;
         if (rb == null) return;
+
+        if (FlappyJumpModifier.TryGetFlapVelocity(out float flapVelocity))
+        {
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, flapVelocity);
+            return;
+        }
 
         if (CeilingJumpModifier.TryGetJumpVelocity(this, rb, out float ceilingJumpVelocity))
         {

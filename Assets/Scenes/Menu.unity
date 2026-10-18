@@ -11148,7 +11148,7 @@ RectTransform:
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
   m_AnchoredPosition: {x: 105.975, y: -50}
-  m_SizeDelta: {x: 0, y: 70}
+  m_SizeDelta: {x: 31.95, y: 70}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &806541308
 MonoBehaviour:
@@ -21301,7 +21301,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LevelSelectManager
   levelButtonPrefab: {fileID: 5830653869355626750, guid: a2d1e0c673964e04fa0ae895018f7087, type: 3}
   content: {fileID: 1793434399}
-  totalLevel: 10
+  totalLevel: 20
 --- !u!114 &1583143295
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -21711,11 +21711,6 @@ MonoBehaviour:
       MaxSecondsBetweenUpdates: 0
     m_InternalValue: -1
   ClientDino:
-    UpdateTraits:
-      MinSecondsBetweenUpdates: 0
-      MaxSecondsBetweenUpdates: 0
-    m_InternalValue: -1
-  MinLevelLobby:
     UpdateTraits:
       MinSecondsBetweenUpdates: 0
       MaxSecondsBetweenUpdates: 0
