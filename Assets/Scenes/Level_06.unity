@@ -325,7 +325,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3a1cbdd06c9fa46f987ced75df997240, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ReverseHorizontalControls
-  reverseControls: 1
+  activationMode: 0
+  initiallyReversed: 0
+  triggerZones: []
+  triggerConsumption: 0
 --- !u!1 &137735005
 GameObject:
   m_ObjectHideFlags: 0
@@ -2810,6 +2813,10 @@ PrefabInstance:
     - target: {fileID: 567092375281151614, guid: 5a958ebfe31d0fc4b83c92e6fe59e836, type: 3}
       propertyPath: m_Name
       value: __Door__
+      objectReference: {fileID: 0}
+    - target: {fileID: 2927207506600053558, guid: 5a958ebfe31d0fc4b83c92e6fe59e836, type: 3}
+      propertyPath: nextSceneName
+      value: Level_07
       objectReference: {fileID: 0}
     - target: {fileID: 5667876503461560799, guid: 5a958ebfe31d0fc4b83c92e6fe59e836, type: 3}
       propertyPath: GlobalObjectIdHash

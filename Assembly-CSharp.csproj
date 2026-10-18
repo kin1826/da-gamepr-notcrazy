@@ -43,7 +43,7 @@
     <UnityVersion>6000.3.11f1</UnityVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Analyzer Include="/Users/admin/.vscode/extensions/visualstudiotoolsforunity.vstuc-1.3.1/Analyzers/Microsoft.Unity.Analyzers.dll" />
+    <Analyzer Include="/Users/admin/.vscode/extensions/visualstudiotoolsforunity.vstuc-1.3.2/Analyzers/Microsoft.Unity.Analyzers.dll" />
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.3.11f1/Unity.app/Contents/Resources/BuildPipeline/Unity.SourceGenerators/Unity.SourceGenerators.dll" />
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.3.11f1/Unity.app/Contents/Resources/BuildPipeline/Unity.SourceGenerators/Unity.Properties.SourceGenerator.dll" />
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.3.11f1/Unity.app/Contents/Resources/BuildPipeline/Unity.SourceGenerators/Unity.UIToolkit.SourceGenerator.dll" />
@@ -65,6 +65,7 @@
     <Compile Include="Assets/Script/TrapButton.cs" />
     <Compile Include="Assets/Script/utils/CameraShake.cs" />
     <Compile Include="Assets/Script/utils/ButtonPressEffect.cs" />
+    <Compile Include="Assets/Script/FlappyJumpModifier.cs" />
     <Compile Include="Assets/Script/manager/AudioManager.cs" />
     <Compile Include="Assets/Script/UI/DailyRewardPanel.cs" />
     <Compile Include="Assets/Script/UI/LeaderboardPanel.cs" />
@@ -73,6 +74,7 @@
     <Compile Include="Assets/Script/core/SaveManager.cs" />
     <Compile Include="Assets/Script/manager/MainManager.cs" />
     <Compile Include="Assets/Script/SceneTransition.cs" />
+    <Compile Include="Assets/Script/utils/ReverseHorizontalControls.cs" />
     <Compile Include="Assets/Script/API/ApiModels.cs" />
     <Compile Include="Assets/Script/manager/ApiManager.cs" />
     <Compile Include="Assets/Script/manager/LevelManager.cs" />
@@ -89,9 +91,8 @@
     <Compile Include="Assets/Script/core/DinoSelectButton.cs" />
     <Compile Include="Assets/Script/NetworkConfig.cs" />
     <Compile Include="Assets/Script/manager/LobbyManager.cs" />
-    <Compile Include="Assets/Script/CeilingJumpModifier.cs" />
-    <Compile Include="Assets/Script/ReverseHorizontalControls.cs" />
     <Compile Include="Assets/Script/NetworkSetup.cs" />
+    <Compile Include="Assets/Script/utils/CeilingJumpModifier.cs" />
     <Compile Include="Assets/Script/utils/ColorConfig.cs" />
     <Compile Include="Assets/Script/core/RoomData.cs" />
     <Compile Include="Assets/Script/UI/SkipChoicePanel.cs" />
