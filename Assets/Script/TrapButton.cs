@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -69,22 +68,17 @@ public class TrapButton : NetworkBehaviour
             return;
         }
 
-        activatorsHolding.Add(activatorId);
-
-        if (IsMultiplayer() && IsSpawned)
+        if (!CanRunTrapLogic())
         {
-            if (!IsServer)
+            if (IsSpawned && TryGetLocalPlayerClientId(collision, out _))
             {
-                PressServerRpc();
+                ReportPlayerPresenceRpc(true);
             }
-            else
-            {
-                Press();
-            }
+
             return;
         }
 
-        Press();
+        RegisterActivatorEnter(activatorId);
     }
 
     private void OnTriggerExit2D(Collider2D collision)
@@ -94,33 +88,36 @@ public class TrapButton : NetworkBehaviour
             return;
         }
 
-        activatorsHolding.Remove(activatorId);
-
-        if (GetEffectiveMode() != ButtonMode.Hold || activatorsHolding.Count != 0)
+        if (!CanRunTrapLogic())
         {
+            if (IsSpawned && TryGetLocalPlayerClientId(collision, out _))
+            {
+                ReportPlayerPresenceRpc(false);
+            }
+
             return;
         }
 
-        if (IsMultiplayer() && IsSpawned)
-        {
-            if (!IsServer)
-            {
-                DeactivateServerRpc();
-            }
-            else
-            {
-                DeactivateActions();
-            }
-            return;
-        }
-
-        DeactivateActions();
+        RegisterActivatorExit(activatorId);
     }
 
-    [ServerRpc(RequireOwnership = false)]
-    private void PressServerRpc(ServerRpcParams rpcParams = default)
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void ReportPlayerPresenceRpc(bool entered, RpcParams rpcParams = default)
     {
-        if (!IsServer)
+        int activatorId = rpcParams.Receive.SenderClientId.GetHashCode();
+        if (entered)
+        {
+            RegisterActivatorEnter(activatorId);
+        }
+        else
+        {
+            RegisterActivatorExit(activatorId);
+        }
+    }
+
+    private void RegisterActivatorEnter(int activatorId)
+    {
+        if (!activatorsHolding.Add(activatorId))
         {
             return;
         }
@@ -128,10 +125,14 @@ public class TrapButton : NetworkBehaviour
         Press();
     }
 
-    [ServerRpc(RequireOwnership = false)]
-    private void DeactivateServerRpc(ServerRpcParams rpcParams = default)
+    private void RegisterActivatorExit(int activatorId)
     {
-        if (!IsServer)
+        if (!activatorsHolding.Remove(activatorId))
+        {
+            return;
+        }
+
+        if (GetEffectiveMode() != ButtonMode.Hold || activatorsHolding.Count != 0)
         {
             return;
         }
@@ -152,14 +153,13 @@ public class TrapButton : NetworkBehaviour
                 }
 
                 pressedOnce = true;
-                isPressed.Value = true;
+                SetPressedState(true);
                 ActivateActions();
                 break;
 
             case ButtonMode.Toggle:
                 toggledOn = !toggledOn;
-                isPressed.Value = toggledOn;
-                StartCoroutine(PulsePressedVisual());
+                SetPressedState(toggledOn);
                 if (toggledOn)
                 {
                     ActivateActions();
@@ -171,7 +171,7 @@ public class TrapButton : NetworkBehaviour
                 break;
 
             case ButtonMode.Hold:
-                isPressed.Value = true;
+                SetPressedState(true);
                 ActivateActions();
                 break;
         }
@@ -192,11 +192,11 @@ public class TrapButton : NetworkBehaviour
     {
         if (GetEffectiveMode() != ButtonMode.Toggle)
         {
-            isPressed.Value = true;
+            SetPressedState(true);
         }
         else
         {
-            isPressed.Value = toggledOn;
+            SetPressedState(toggledOn);
         }
 
         foreach (TrapAction action in actions)
@@ -214,7 +214,7 @@ public class TrapButton : NetworkBehaviour
 
         if (GetEffectiveMode() != ButtonMode.Toggle)
         {
-            isPressed.Value = false;
+            SetPressedState(false);
         }
 
         foreach (TrapAction action in actions)
@@ -254,6 +254,20 @@ public class TrapButton : NetworkBehaviour
         return false;
     }
 
+    private bool TryGetLocalPlayerClientId(Collider2D collision, out ulong clientId)
+    {
+        clientId = 0;
+        PlayerMovement player = collision.GetComponentInParent<PlayerMovement>();
+        NetworkObject networkObject = collision.GetComponentInParent<NetworkObject>();
+        if (player == null || networkObject == null || !networkObject.IsOwner)
+        {
+            return false;
+        }
+
+        clientId = networkObject.OwnerClientId;
+        return true;
+    }
+
     private bool HasTag(GameObject target, string tagName)
     {
         return string.Equals(
@@ -266,6 +280,26 @@ public class TrapButton : NetworkBehaviour
     private bool IsMultiplayer()
     {
         return NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient;
+    }
+
+    private bool CanRunTrapLogic()
+    {
+        return !IsMultiplayer() || IsServer;
+    }
+
+    private void SetPressedState(bool pressed)
+    {
+        if (IsSpawned)
+        {
+            if (!IsServer)
+            {
+                return;
+            }
+
+            isPressed.Value = pressed;
+        }
+
+        UpdatePressedVisual(pressed);
     }
 
     private void SetPressedVisual(bool isPressed)
@@ -284,10 +318,4 @@ public class TrapButton : NetworkBehaviour
         SetPressedVisual(pressed);
     }
 
-    private IEnumerator PulsePressedVisual()
-    {
-        SetPressedVisual(true);
-        yield return new WaitForSeconds(pulseDuration);
-        SetPressedVisual(false);
-    }
 }

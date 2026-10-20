@@ -1,8 +1,13 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
 using Unity.Netcode;
+using Unity.Services.Authentication;
+using Unity.Services.Multiplayer;
 
 /// <summary>
 /// Main manager for UI flow and scene management.
@@ -11,6 +16,8 @@ using Unity.Netcode;
 /// </summary>
 public class MainManager : MonoBehaviour
 {
+    private const float NetworkJoinTimeoutSeconds = 30f;
+
     public static MainManager Instance { get; private set; }
 
     [Header("User")]
@@ -25,6 +32,7 @@ public class MainManager : MonoBehaviour
     public GameObject weaponPanel;
     public GameObject giftPanel;
     public GameObject rankingPanel;
+    public GameObject notiPanel;
 
     [Header("Scene")]
     public string gameplaySceneName = "Level_01";
@@ -37,8 +45,12 @@ public class MainManager : MonoBehaviour
     public Image rightDinoImage;
 
     [Header("Buttons")]
+    public Button findRoomButton;
     public Button joinRoomButton;
     public Button playButton;
+
+    [Tooltip("Queue name configured in the Unity Matchmaker dashboard.")]
+    public string matchmakerQueueName = "QuickMatch-2P";
 
     [Header("Dino Buttons")]
     public Button[] dinoButtons;
@@ -50,6 +62,20 @@ public class MainManager : MonoBehaviour
     [Header("Audio")]
     public int lobbyMusicIndex = 0;
     public AudioClip clickSFX;
+
+    private TMP_Text findRoomButtonLabel;
+    private TMP_Text playButtonLabel;
+    private string defaultFindRoomButtonText;
+    private string defaultPlayButtonText;
+    private CancellationTokenSource quickMatchCancellation;
+    private Task quickMatchTask;
+    private bool quickMatchSearchPending;
+    private bool quickMatchCancelRequested;
+    private string quickMatchCancellationReason;
+    private bool isClosingMultiplayerPanel;
+    private bool waitingForManualRoom;
+    private bool manualJoinPending;
+    private float quickMatchRetryNotBefore;
 
     private void Awake()
     {
@@ -70,14 +96,35 @@ public class MainManager : MonoBehaviour
         NetworkConfig.EnsureInstance();
         ValidateReferences();
 
-        joinRoomButton.interactable = true;
-        playButton.interactable = false;
+        findRoomButtonLabel = findRoomButton != null ? findRoomButton.GetComponentInChildren<TMP_Text>(true) : null;
+        playButtonLabel = playButton != null ? playButton.GetComponentInChildren<TMP_Text>(true) : null;
+        defaultFindRoomButtonText = "Find Room";
+        defaultPlayButtonText = "Play";
+        if (findRoomButtonLabel != null) findRoomButtonLabel.text = defaultFindRoomButtonText;
+        if (playButtonLabel != null) playButtonLabel.text = defaultPlayButtonText;
 
-        leftDinoImage.gameObject.SetActive(false);
-        rightDinoImage.gameObject.SetActive(false);
+        if (joinRoomButton != null) joinRoomButton.interactable = true;
+        if (findRoomButton != null) findRoomButton.interactable = true;
+        if (playButton != null) playButton.interactable = false;
+
+        if (leftDinoImage != null) leftDinoImage.gameObject.SetActive(false);
+        if (rightDinoImage != null) rightDinoImage.gameObject.SetActive(false);
 
         AudioManager.Instance?.PlayMusic(lobbyMusicIndex);
         RefreshPlayerName();
+
+        if (GameData.ShowTeammateDisconnectedNotice)
+        {
+            GameData.ShowTeammateDisconnectedNotice = false;
+            if (notiPanel != null)
+            {
+                notiPanel.SetActive(true);
+            }
+            else
+            {
+                Debug.LogWarning("MainManager: Noti_Panel is not assigned.");
+            }
+        }
     }
 
     public void RefreshPlayerName()
@@ -213,10 +260,364 @@ public class MainManager : MonoBehaviour
         multiplayerPanel.SetActive(true);
     }
 
+    /// <summary>
+    /// Starts a two-player Matchmaker search. The MPS queue creates the session
+    /// when no compatible open session is waiting to be joined.
+    /// </summary>
+    public void StartQuickMatchmaking()
+    {
+        if (quickMatchSearchPending || manualJoinPending || isClosingMultiplayerPanel)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < quickMatchRetryNotBefore)
+        {
+            if (findRoomButtonLabel != null) findRoomButtonLabel.text = "Wait Before Retry";
+            Debug.LogWarning("Matchmaking is cooling down after a rate-limit response. Please wait before retrying.");
+            return;
+        }
+
+        NetworkConfig networkConfig = NetworkConfig.EnsureInstance();
+        if (networkConfig == null)
+        {
+            Debug.LogError("Cannot search for a match: NetworkConfig is missing.");
+            return;
+        }
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        {
+            Debug.LogWarning("Cannot search for a match while another network session is active.");
+            return;
+        }
+
+        ResetMultiplayerLobbyUI();
+        GameData.IsMultiplayer = true;
+        GameData.IsHost = false;
+        waitingForManualRoom = false;
+        networkConfig.isHost = false;
+        networkConfig.relayCode = string.Empty;
+        networkConfig.joinCode = string.Empty;
+        quickMatchCancelRequested = false;
+        quickMatchCancellationReason = null;
+        quickMatchSearchPending = true;
+        quickMatchCancellation = new CancellationTokenSource();
+
+        if (findRoomButton != null) findRoomButton.interactable = true;
+        if (joinRoomButton != null) joinRoomButton.interactable = false;
+        if (playButton != null) playButton.interactable = false;
+        if (findRoomButtonLabel != null) findRoomButtonLabel.text = "Cancel Search";
+        if (playButtonLabel != null) playButtonLabel.text = defaultPlayButtonText;
+        if (dinoButtons != null)
+        {
+            foreach (Button button in dinoButtons)
+            {
+                if (button != null) button.interactable = false;
+            }
+        }
+
+        quickMatchTask = RunQuickMatchmakingAsync(networkConfig, quickMatchCancellation.Token);
+    }
+
+    /// <summary>
+    /// Find Room toggles between starting a search and canceling its ticket.
+    /// Room creation cancellation remains on the host's Play button.
+    /// </summary>
+    public async void OnFindRoomButtonPressed()
+    {
+        if (!quickMatchSearchPending)
+        {
+            StartQuickMatchmaking();
+            return;
+        }
+
+        quickMatchCancelRequested = true;
+        quickMatchCancellationReason = "Find Room button";
+        Debug.LogWarning("[Matchmaking] Search cancellation requested from the Find Room button.");
+        if (findRoomButton != null) findRoomButton.interactable = false;
+        if (findRoomButtonLabel != null) findRoomButtonLabel.text = "Cancelling...";
+        quickMatchCancellation?.Cancel();
+
+        Task pendingTask = quickMatchTask;
+        if (pendingTask != null)
+        {
+            await pendingTask;
+        }
+
+        if (!isClosingMultiplayerPanel)
+        {
+            ResetMultiplayerLobbyUI();
+        }
+    }
+
+    public async void OnMultiplayerPlayButtonPressed()
+    {
+        if (waitingForManualRoom)
+        {
+            await CancelCreatedRoomAsync();
+            return;
+        }
+
+        OpenLevelSelect();
+    }
+
+    private async Task CancelCreatedRoomAsync()
+    {
+        if (!waitingForManualRoom)
+        {
+            return;
+        }
+
+        waitingForManualRoom = false;
+        if (playButton != null) playButton.interactable = false;
+        if (playButtonLabel != null) playButtonLabel.text = "Cancelling...";
+
+        if (LobbyManager.Instance != null && LobbyManager.Instance.IsSpawned &&
+            NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        {
+            LobbyManager.Instance.ResetDinoSelections();
+        }
+
+        NetworkConfig networkConfig = NetworkConfig.Instance;
+        if (networkConfig != null)
+        {
+            await networkConfig.LeaveActiveSessionAsync();
+        }
+
+        ResetMultiplayerLobbyUI();
+        GameData.IsMultiplayer = true;
+        GameData.IsHost = false;
+        Debug.Log("Created room canceled and lobby state reset.");
+    }
+
+    private async Task RunQuickMatchmakingAsync(NetworkConfig networkConfig, CancellationToken cancellationToken)
+    {
+        bool matched = false;
+        string playerId = "<unavailable>";
+        string failureButtonText = null;
+        try
+        {
+            await networkConfig.EnsureServicesInitializedAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            playerId = AuthenticationService.Instance.PlayerId;
+
+            if (string.IsNullOrWhiteSpace(matchmakerQueueName))
+            {
+                throw new InvalidOperationException("Matchmaker queue name is empty.");
+            }
+
+            Debug.Log($"[Matchmaking] Requesting queue '{matchmakerQueueName.Trim()}' with profile " +
+                $"'{networkConfig.AuthenticationProfileName}' and PlayerId '{playerId}'. " +
+                "Both clients must use the same Unity project/environment and different Player IDs.");
+
+            MatchmakerOptions matchOptions = new MatchmakerOptions
+            {
+                QueueName = matchmakerQueueName.Trim()
+            };
+            SessionOptions sessionOptions = new SessionOptions { MaxPlayers = 2 }.WithRelayNetwork();
+            ISession session;
+            try
+            {
+                Debug.Log("[Matchmaking] Checking for an existing open room before creating a Matchmaker ticket.");
+                session = await MultiplayerService.Instance.MatchmakeSessionAsync(
+                    new QuickJoinOptions
+                    {
+                        Timeout = TimeSpan.FromSeconds(2),
+                        CreateSession = false
+                    },
+                    sessionOptions);
+                Debug.Log($"[Matchmaking] Quick Join found existing session '{session.Id}'.");
+            }
+            catch (Exception quickJoinException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (quickMatchCancelRequested || isClosingMultiplayerPanel)
+                {
+                    throw new OperationCanceledException("Room search canceled before Matchmaker fallback.", quickJoinException,
+                        cancellationToken);
+                }
+
+                Debug.Log($"[Matchmaking] No open room found through Quick Join ({quickJoinException.Message}); " +
+                    "falling back to the two-player Matchmaker queue.");
+                session = await MultiplayerService.Instance.MatchmakeSessionAsync(
+                    matchOptions,
+                    sessionOptions,
+                    cancellationToken);
+            }
+
+            if (session == null)
+            {
+                throw new InvalidOperationException("Matchmaker returned an empty session.");
+            }
+
+            networkConfig.SetActiveSession(session);
+
+            if (cancellationToken.IsCancellationRequested || quickMatchCancelRequested || isClosingMultiplayerPanel)
+            {
+                await networkConfig.LeaveActiveSessionAsync();
+                return;
+            }
+
+            await WaitForNetworkAndLobbyAsync(session.IsHost, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            networkConfig.isHost = session.IsHost;
+            EnterMultiplayerDinoSelection(session.IsHost, "quick match");
+
+            matched = true;
+            Debug.Log($"[Matchmaking] Match '{session.Id}' connected. This player is " +
+                $"{(session.IsHost ? "host" : "client")}; NGO client connected={NetworkManager.Singleton.IsConnectedClient}, " +
+                $"LobbyManager spawned={LobbyManager.Instance != null && LobbyManager.Instance.IsSpawned}.");
+        }
+        catch (OperationCanceledException)
+        {
+            if (quickMatchCancelRequested || cancellationToken.IsCancellationRequested)
+            {
+                Debug.Log($"[Matchmaking] Search canceled (reason: {quickMatchCancellationReason ?? "cancellation token"}).");
+            }
+            else
+            {
+                failureButtonText = "Try Again";
+                Debug.LogWarning("[Matchmaking] Search was canceled before a match was assigned. No session was joined.");
+            }
+        }
+        catch (Exception exception)
+        {
+            if (quickMatchCancelRequested || cancellationToken.IsCancellationRequested)
+            {
+                Debug.Log($"[Matchmaking] Search canceled (reason: {quickMatchCancellationReason ?? "cancellation token"}); " +
+                    $"exception type={exception.GetType().Name}, message={exception.Message}");
+            }
+            else if (exception is SessionException sessionException &&
+                sessionException.Error == SessionError.MatchmakerCancelled)
+            {
+                failureButtonText = "Try Again";
+                Debug.LogWarning("[Matchmaking] The Matchmaker canceled this ticket before assigning a session. " +
+                    "The character-selection screen was not opened.");
+            }
+            else
+            {
+                bool rateLimited = IsMatchmakerRateLimited(exception);
+                failureButtonText = rateLimited ? "Wait Before Retry" : "Try Again";
+                if (rateLimited)
+                {
+                    quickMatchRetryNotBefore = Time.unscaledTime + 5f;
+                }
+
+                Debug.LogError($"[Matchmaking] Failed for queue '{matchmakerQueueName}' and PlayerId '{playerId}': {exception}");
+            }
+        }
+        finally
+        {
+            // MatchmakeSessionAsync owns a live ticket/polling loop. Dispose it on
+            // failure too, otherwise retrying can leave old polls consuming quota.
+            if (!matched && quickMatchCancellation != null && !quickMatchCancellation.IsCancellationRequested)
+            {
+                quickMatchCancellation.Cancel();
+            }
+
+            if (!matched && networkConfig.ActiveSession != null)
+            {
+                await networkConfig.LeaveActiveSessionAsync();
+            }
+
+            quickMatchSearchPending = false;
+
+            if (!isClosingMultiplayerPanel)
+            {
+                if (matched)
+                {
+                    if (findRoomButtonLabel != null) findRoomButtonLabel.text = defaultFindRoomButtonText;
+                }
+                else
+                {
+                    ResetMultiplayerLobbyUI();
+                    if (!quickMatchCancelRequested && failureButtonText != null && findRoomButtonLabel != null)
+                    {
+                        findRoomButtonLabel.text = failureButtonText;
+                    }
+                }
+
+                if (findRoomButton != null) findRoomButton.interactable = !matched;
+                if (joinRoomButton != null) joinRoomButton.interactable = !matched;
+            }
+
+            quickMatchCancellation?.Dispose();
+            quickMatchCancellation = null;
+            quickMatchTask = null;
+        }
+    }
+
+    private static bool IsMatchmakerRateLimited(Exception exception)
+    {
+        for (Exception current = exception; current != null; current = current.InnerException)
+        {
+            if (current.Message.IndexOf("429", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                current.Message.IndexOf("Too Many Requests", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void ResetMultiplayerLobbyUI()
+    {
+        GameData.SelectedDino = 0;
+        RoomData.HostDino = -1;
+        RoomData.ClientDino = -1;
+        RoomData.RoomCode = string.Empty;
+        manualJoinPending = false;
+
+        if (LobbyManager.Instance != null)
+        {
+            LobbyManager.Instance.ResetDinoSelections();
+        }
+
+        waitingForManualRoom = false;
+
+        if (leftDinoImage != null)
+        {
+            leftDinoImage.sprite = null;
+            leftDinoImage.gameObject.SetActive(false);
+        }
+        if (rightDinoImage != null)
+        {
+            rightDinoImage.sprite = null;
+            rightDinoImage.gameObject.SetActive(false);
+        }
+        if (roomCodeInput != null) roomCodeInput.text = string.Empty;
+        if (codeDisplayInput != null) codeDisplayInput.text = string.Empty;
+        if (dinoSelectPanel != null) dinoSelectPanel.SetActive(false);
+        if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
+        if (joinRoomButton != null) joinRoomButton.interactable = true;
+        if (findRoomButton != null) findRoomButton.interactable = true;
+        if (findRoomButtonLabel != null) findRoomButtonLabel.text = defaultFindRoomButtonText;
+        if (playButton != null) playButton.interactable = false;
+        if (playButtonLabel != null) playButtonLabel.text = defaultPlayButtonText;
+
+        if (dinoButtons != null)
+        {
+            foreach (Button button in dinoButtons)
+            {
+                if (button != null) button.interactable = true;
+            }
+        }
+    }
+
     public void OpenLevelSelect()
     {
         levelSelectPanel.SetActive(true);
-        LevelSelectManager.Instance?.GenerateAgain();
+
+        if (LevelSelectManager.Instance != null)
+        {
+            LevelSelectManager.Instance.GenerateAgain();
+        }
+        else
+        {
+            Debug.LogWarning("MainManager: LevelSelectManager is not available.");
+        }
     }
 
     // =========================
@@ -224,6 +625,13 @@ public class MainManager : MonoBehaviour
     // =========================
     public async void CreateRoom()
     {
+        if (quickMatchSearchPending || manualJoinPending ||
+            (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening))
+        {
+            Debug.LogWarning("Cannot create a manual room while another matchmaking or network session is active.");
+            return;
+        }
+
         NetworkConfig networkConfig = NetworkConfig.EnsureInstance();
         if (networkConfig == null)
         {
@@ -235,23 +643,26 @@ public class MainManager : MonoBehaviour
 
         try
         {
-            // Use relay for online multiplayer
-            string relayCode = await networkConfig.CreateRelay();
-            if (relayCode != null)
-            {
-                RoomData.RoomCode = relayCode;
-                if (codeDisplayInput != null)
-                {
-                    codeDisplayInput.text = relayCode;
-                }
-                Debug.Log($"Share this Relay join code with the client: {relayCode}");
-                dinoSelectPanel.SetActive(true);
-                Debug.Log($"Room created with relay code: {relayCode}");
-            }
+            ISession session = await networkConfig.CreateHostedSessionAsync();
+            await WaitForNetworkAndLobbyAsync(true, CancellationToken.None);
+
+            waitingForManualRoom = true;
+            RoomData.RoomCode = session.Code;
+            if (findRoomButton != null) findRoomButton.interactable = false;
+            if (joinRoomButton != null) joinRoomButton.interactable = false;
+            if (playButton != null) playButton.interactable = true;
+            if (playButtonLabel != null) playButtonLabel.text = "Cancel Room";
+            if (codeDisplayInput != null) codeDisplayInput.text = session.Code;
+            dinoSelectPanel?.SetActive(true);
+            Debug.Log($"[Room] Waiting for a player. Session '{session.Id}' is open to Quick Join; code='{session.Code}'.");
         }
         catch (System.Exception ex)
         {
             Debug.LogError($"Failed to create room: {ex.Message}");
+            if (networkConfig.ActiveSession != null)
+            {
+                await networkConfig.LeaveActiveSessionAsync();
+            }
         }
 
     }
@@ -322,8 +733,6 @@ public class MainManager : MonoBehaviour
             playButton.interactable = false;
             Debug.Log($"Client selected dino: {index}");
             UpdateRoomUI();
-
-            LevelSelectManager.Instance?.GenerateAgain();
         }
     }
     // =========================
@@ -368,16 +777,56 @@ public class MainManager : MonoBehaviour
     // =========================
     // CLOSE MULTIPLAYER PANEL
     // =========================
-    public void CloseMultiplayerPanel()
+    public async void CloseMultiplayerPanel()
     {
-        multiplayerPanel.SetActive(false);
-        Debug.Log("Close Multi");
+        if (isClosingMultiplayerPanel)
+        {
+            return;
+        }
 
-        mainPanel.SetActive(true);
+        isClosingMultiplayerPanel = true;
+        quickMatchCancelRequested = true;
+        quickMatchCancellationReason = "closing Multiplayer panel";
+        Debug.LogWarning("[Matchmaking] Search cancellation requested because the Multiplayer panel is closing.");
+        quickMatchCancellation?.Cancel();
+
+        Task pendingMatchTask = quickMatchTask;
+        if (pendingMatchTask != null)
+        {
+            await pendingMatchTask;
+        }
+
+        if (LobbyManager.Instance != null && LobbyManager.Instance.IsSpawned &&
+            NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        {
+            LobbyManager.Instance.ResetDinoSelections();
+        }
+
+        NetworkConfig networkConfig = NetworkConfig.Instance;
+        if (networkConfig != null)
+        {
+            await networkConfig.LeaveActiveSessionAsync();
+        }
+
+        ResetMultiplayerLobbyUI();
+        GameData.IsMultiplayer = false;
+        GameData.IsHost = false;
+
+        if (multiplayerPanel != null) multiplayerPanel.SetActive(false);
+        if (mainPanel != null) mainPanel.SetActive(true);
+
+        isClosingMultiplayerPanel = false;
+        quickMatchCancelRequested = false;
+        Debug.Log("Multiplayer lobby closed and connection state reset.");
     }
     public void CloseLevelSelectPanel()
     {
         levelSelectPanel.SetActive(false);
+    }
+
+    public void CloseNotiPanel()
+    {
+        notiPanel?.SetActive(false);
     }
 
     // =========================
@@ -422,6 +871,13 @@ public class MainManager : MonoBehaviour
     /// </summary>
     public async void JoinRoom()
     {
+        if (quickMatchSearchPending || manualJoinPending ||
+            (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening))
+        {
+            Debug.LogWarning("Cannot join a code room while another matchmaking or network session is active.");
+            return;
+        }
+
         if (roomCodeInput == null)
         {
             Debug.LogError("roomCodeInput not assigned!");
@@ -444,46 +900,129 @@ public class MainManager : MonoBehaviour
         }
 
         roomCodeInput.text = inputCode;
-        GameData.IsHost = false;
+        manualJoinPending = true;
+        if (joinRoomButton != null) joinRoomButton.interactable = false;
+        if (findRoomButton != null) findRoomButton.interactable = false;
+        bool joined = false;
 
         try
         {
-            bool success = await networkConfig.JoinRelay(inputCode);
-            if (success)
-            {
-                dinoSelectPanel.SetActive(true);
-                DisableHostDino();
-                Debug.Log("Successfully joined relay room!");
-            }
-            else
-            {
-                Debug.LogWarning("Failed to join relay room - invalid code or connection issue");
-            }
+            ISession session = await networkConfig.JoinHostedSessionByCodeAsync(inputCode);
+            await WaitForNetworkAndLobbyAsync(false, CancellationToken.None);
+            EnterMultiplayerDinoSelection(false, "room code join");
+            joined = true;
+            Debug.Log($"[Room Join] Connected to session '{session.Id}'; entering shared Dino selection flow.");
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             Debug.LogError($"Failed to join room: {ex.Message}");
         }
+        finally
+        {
+            manualJoinPending = false;
+            if (!joined)
+            {
+                await networkConfig.LeaveActiveSessionAsync();
+                ResetMultiplayerLobbyUI();
+                GameData.IsMultiplayer = false;
+                GameData.IsHost = false;
+            }
+        }
+    }
 
-       
+    private async Task WaitForNetworkAndLobbyAsync(bool expectHost, CancellationToken cancellationToken)
+    {
+        float deadline = Time.realtimeSinceStartup + NetworkJoinTimeoutSeconds;
+        while (Time.realtimeSinceStartup < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            NetworkManager networkManager = NetworkManager.Singleton;
+            bool roleReady = networkManager != null && networkManager.IsConnectedClient &&
+                (expectHost ? networkManager.IsServer : networkManager.IsClient && !networkManager.IsServer);
+            bool lobbyReady = LobbyManager.Instance != null && LobbyManager.Instance.IsSpawned;
+
+            if (roleReady && lobbyReady)
+            {
+                return;
+            }
+
+            await Task.Yield();
+        }
+
+        NetworkManager currentNetwork = NetworkManager.Singleton;
+        bool listening = currentNetwork != null && currentNetwork.IsListening;
+        bool connected = currentNetwork != null && currentNetwork.IsConnectedClient;
+        bool lobbySpawned = LobbyManager.Instance != null && LobbyManager.Instance.IsSpawned;
+        throw new TimeoutException(
+            $"Timed out waiting for {(expectHost ? "host" : "client")} network/lobby readiness " +
+            $"(listening={listening}, connected={connected}, LobbyManager spawned={lobbySpawned}).");
     }
 
     /// <summary>
-    /// Disable the dino button selected by host.
+    /// Shared post-connect flow for manual Relay joins and Matchmaker clients:
+    /// select a Dino only after NGO and the networked lobby object are ready.
     /// </summary>
-    private void DisableHostDino()
+    private void EnterMultiplayerDinoSelection(bool isHost, string source)
     {
-        if (LobbyManager.Instance == null)
+        NetworkConfig networkConfig = NetworkConfig.Instance;
+        if (networkConfig != null) networkConfig.isHost = isHost;
+
+        GameData.IsMultiplayer = true;
+        GameData.IsHost = isHost;
+        GameData.SelectedDino = 0;
+        waitingForManualRoom = false;
+        RoomData.HostDino = -1;
+        RoomData.ClientDino = -1;
+        RoomData.RoomCode = string.Empty;
+
+        if (codeDisplayInput != null) codeDisplayInput.text = string.Empty;
+        if (roomCodeInput != null) roomCodeInput.text = string.Empty;
+        if (leftDinoImage != null)
         {
-            Debug.LogWarning("LobbyManager not available yet");
-            return;
+            leftDinoImage.sprite = null;
+            leftDinoImage.gameObject.SetActive(false);
+        }
+        if (rightDinoImage != null)
+        {
+            rightDinoImage.sprite = null;
+            rightDinoImage.gameObject.SetActive(false);
         }
 
-        int hostIndex = LobbyManager.Instance.HostDino.Value;
-
-        if (hostIndex >= 0 && hostIndex < dinoButtons.Length)
+        if (findRoomButton != null) findRoomButton.interactable = false;
+        if (joinRoomButton != null) joinRoomButton.interactable = false;
+        if (playButton != null) playButton.interactable = false;
+        if (playButtonLabel != null) playButtonLabel.text = defaultPlayButtonText;
+        if (dinoButtons != null)
         {
-            dinoButtons[hostIndex].interactable = false;
+            foreach (Button button in dinoButtons)
+            {
+                if (button != null) button.interactable = true;
+            }
+        }
+
+        if (levelSelectPanel != null) levelSelectPanel.SetActive(false);
+        if (dinoSelectPanel != null) dinoSelectPanel.SetActive(true);
+
+        if (LobbyManager.Instance != null)
+        {
+            UpdateDinoButtonAvailability(LobbyManager.Instance.HostDino.Value);
+        }
+
+        UpdateRoomUI();
+        Debug.Log($"[Multiplayer Lobby] {source}: {(isHost ? "host" : "joiner")} entered Dino selection.");
+    }
+
+    private void UpdateDinoButtonAvailability(int hostDino)
+    {
+        if (dinoButtons == null) return;
+
+        for (int i = 0; i < dinoButtons.Length; i++)
+        {
+            if (dinoButtons[i] != null)
+            {
+                dinoButtons[i].interactable = GameData.IsHost || i != hostDino;
+            }
         }
     }
 
@@ -493,24 +1032,43 @@ public class MainManager : MonoBehaviour
     /// </summary>
     public void UpdateRoomUI()
     {
-        if (LobbyManager.Instance == null)
+        if (quickMatchSearchPending || isClosingMultiplayerPanel || LobbyManager.Instance == null ||
+            NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
             return;
 
         int hostDino = LobbyManager.Instance.HostDino.Value;
         int clientDino = LobbyManager.Instance.ClientDino.Value;
+        UpdateDinoButtonAvailability(hostDino);
 
-        if (hostDino != -1 && hostDino < dinoSprites.Length)
+        if (hostDino >= 0 && hostDino < dinoSprites.Length && leftDinoImage != null)
         {
             leftDinoImage.sprite = dinoSprites[hostDino];
             leftDinoImage.gameObject.SetActive(true);
         }
 
-        if (clientDino != -1 && clientDino < dinoSprites.Length)
+        if (clientDino >= 0 && clientDino < dinoSprites.Length && rightDinoImage != null)
         {
             rightDinoImage.sprite = dinoSprites[clientDino];
             rightDinoImage.gameObject.SetActive(true);
+        }
 
-            playButton.interactable = NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer;
+        if (playButton != null)
+        {
+            bool isHost = NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer;
+            bool bothPlayersSelected = hostDino >= 0 && hostDino < dinoSprites.Length &&
+                clientDino >= 0 && clientDino < dinoSprites.Length;
+
+            if (waitingForManualRoom && isHost && bothPlayersSelected)
+            {
+                waitingForManualRoom = false;
+            }
+
+            bool canCancelRoom = waitingForManualRoom && isHost;
+            playButton.interactable = canCancelRoom || (bothPlayersSelected && isHost);
+            if (playButtonLabel != null)
+            {
+                playButtonLabel.text = canCancelRoom ? "Cancel Room" : defaultPlayButtonText;
+            }
         }
     }
 

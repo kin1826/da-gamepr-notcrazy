@@ -6,24 +6,111 @@ using UnityEngine.SceneManagement;
 
 public class PlayerSpawner : NetworkBehaviour
 {
+    [SerializeField, Min(0f)] private float spawnProtectionDuration = 0.15f;
+
+    private readonly NetworkVariable<bool> networkSpawnProtected = new(
+        true,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Owner
+    );
+
+    private bool localSpawnProtected;
+    private Coroutine spawnRoutine;
+
+    public bool IsSpawnProtected => localSpawnProtected
+        || (IsSpawned && networkSpawnProtected.Value);
+
+    private void Start()
+    {
+        // Single-player instances are instantiated locally and never receive
+        // OnNetworkSpawn, so they run the same stabilization sequence here.
+        if (!IsSpawned)
+        {
+            StartSpawnSequence();
+        }
+    }
+
     public override void OnNetworkSpawn()
     {
         if (!IsOwner) return;
 
         SceneManager.sceneLoaded += OnSceneLoaded;
-        SetPhysics(false);
-        SetVisible(false);
-        StartCoroutine(SpawnSequence());
+
+        if (SceneManager.GetActiveScene().name == "Menu")
+        {
+            BeginSpawnProtection();
+            SetPhysics(false);
+            SetVisible(false);
+            return;
+        }
+
+        StartSpawnSequence();
     }
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         if (!IsOwner) return;
-        if (scene.name == "Menu") return;
 
+        if (scene.name == "Menu")
+        {
+            StopSpawnSequence();
+            BeginSpawnProtection();
+            SetPhysics(false);
+            SetVisible(false);
+            return;
+        }
+
+        StartSpawnSequence();
+    }
+
+    public void BeginSpawnProtection()
+    {
+        // Only the owner writes the networked protection state. Non-owner
+        // copies receive it through the NetworkVariable.
+        if (IsSpawned && !IsOwner)
+        {
+            return;
+        }
+
+        localSpawnProtected = true;
+        if (IsSpawned)
+        {
+            networkSpawnProtected.Value = true;
+        }
+    }
+
+    private void EndSpawnProtection()
+    {
+        if (IsSpawned && !IsOwner)
+        {
+            return;
+        }
+
+        localSpawnProtected = false;
+        if (IsSpawned)
+        {
+            networkSpawnProtected.Value = false;
+        }
+    }
+
+    private void StartSpawnSequence()
+    {
+        StopSpawnSequence();
+        BeginSpawnProtection();
         SetPhysics(false);
         SetVisible(false);
-        StartCoroutine(SpawnSequence());
+        spawnRoutine = StartCoroutine(SpawnSequence());
+    }
+
+    private void StopSpawnSequence()
+    {
+        if (spawnRoutine == null)
+        {
+            return;
+        }
+
+        StopCoroutine(spawnRoutine);
+        spawnRoutine = null;
     }
 
     private IEnumerator SpawnSequence()
@@ -40,6 +127,11 @@ public class PlayerSpawner : NetworkBehaviour
 
         // Set position while physics is still disabled (avoids teleport-under-load jitter).
         TryMoveToSpawnPoint();
+        Physics2D.SyncTransforms();
+
+        // Give the physics world one full step to register the teleported
+        // collider before allowing the player to move again.
+        yield return new WaitForFixedUpdate();
 
         // Re-enable physics.
         SetPhysics(true);
@@ -49,6 +141,14 @@ public class PlayerSpawner : NetworkBehaviour
         yield return new WaitForFixedUpdate();
 
         SetVisible(true);
+
+        if (spawnProtectionDuration > 0f)
+        {
+            yield return new WaitForSecondsRealtime(spawnProtectionDuration);
+        }
+
+        EndSpawnProtection();
+        spawnRoutine = null;
     }
 
     private void TryMoveToSpawnPoint()
@@ -103,6 +203,8 @@ public class PlayerSpawner : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        StopSpawnSequence();
+
         if (IsOwner)
             SceneManager.sceneLoaded -= OnSceneLoaded;
 

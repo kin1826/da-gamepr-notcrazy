@@ -1,4 +1,5 @@
 using System.Collections;
+using System;
 using UnityEngine;
 
 public class CameraShake : MonoBehaviour
@@ -21,9 +22,16 @@ public class CameraShake : MonoBehaviour
     [SerializeField] private bool triggerOnce;
 
     private bool hasTriggered;
+    private Coroutine activeShake;
+    private Vector3 restLocalPosition;
+
+    public float DefaultDuration => defaultDuration;
+    public float DefaultMagnitude => defaultMagnitude;
 
     private void Awake()
     {
+        restLocalPosition = transform.localPosition;
+
         // Trigger instances only request a shake from the camera instance.
         if (shakeOnPlayerTrigger)
         {
@@ -41,7 +49,34 @@ public class CameraShake : MonoBehaviour
 
     public void Shake(float duration, float magnitude)
     {
-        StartCoroutine(DoShake(duration, magnitude));
+        Shake(duration, magnitude, null);
+    }
+
+    public void Shake(float duration, float magnitude, Action onCompleted)
+    {
+        if (duration <= 0f || magnitude <= 0f)
+        {
+            transform.localPosition = restLocalPosition;
+            onCompleted?.Invoke();
+            return;
+        }
+
+        if (activeShake != null)
+        {
+            StopCoroutine(activeShake);
+            activeShake = null;
+            transform.localPosition = restLocalPosition;
+        }
+
+        activeShake = StartCoroutine(DoShake(duration, magnitude, onCompleted));
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
     }
 
     private void OnTriggerEnter2D(Collider2D other)
@@ -61,20 +96,25 @@ public class CameraShake : MonoBehaviour
         hasTriggered = true;
     }
 
-    private IEnumerator DoShake(float duration, float magnitude)
+    private IEnumerator DoShake(float duration, float magnitude, Action onCompleted)
     {
-        Vector3 origin = transform.localPosition;
         float elapsed = 0f;
 
         while (elapsed < duration)
         {
-            float x = Random.Range(-1f, 1f) * magnitude;
-            float y = Random.Range(-1f, 1f) * magnitude;
-            transform.localPosition = new Vector3(origin.x + x, origin.y + y, origin.z);
+            float x = UnityEngine.Random.Range(-1f, 1f) * magnitude;
+            float y = UnityEngine.Random.Range(-1f, 1f) * magnitude;
+            transform.localPosition = new Vector3(
+                restLocalPosition.x + x,
+                restLocalPosition.y + y,
+                restLocalPosition.z
+            );
             elapsed += Time.unscaledDeltaTime;
             yield return null;
         }
 
-        transform.localPosition = origin;
+        transform.localPosition = restLocalPosition;
+        activeShake = null;
+        onCompleted?.Invoke();
     }
 }

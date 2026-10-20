@@ -1,3 +1,4 @@
+using System;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -7,94 +8,195 @@ public class PlatformSequence : NetworkBehaviour
     public Transform targetPos;
     public float speed = 5f;
 
-    private NetworkVariable<bool> isTriggered = new NetworkVariable<bool>(false);
+    private struct MotionState : INetworkSerializable, IEquatable<MotionState>
+    {
+        public Vector3 From;
+        public Vector3 To;
+        public double StartedAt;
+        public float Duration;
+        public bool IsMoving;
 
-    private NetworkVariable<Vector3> syncedPosition = new NetworkVariable<Vector3>(
-        Vector3.zero,
+        public void NetworkSerialize<T>(BufferSerializer<T> serializer)
+            where T : IReaderWriter
+        {
+            serializer.SerializeValue(ref From);
+            serializer.SerializeValue(ref To);
+            serializer.SerializeValue(ref StartedAt);
+            serializer.SerializeValue(ref Duration);
+            serializer.SerializeValue(ref IsMoving);
+        }
+
+        public bool Equals(MotionState other)
+        {
+            return From == other.From
+                && To == other.To
+                && StartedAt.Equals(other.StartedAt)
+                && Duration.Equals(other.Duration)
+                && IsMoving == other.IsMoving;
+        }
+    }
+
+    private readonly NetworkVariable<MotionState> motion = new(
+        default,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server
     );
 
+    private MotionState localMotion;
     private Vector3 startPosition;
-
-    // Client-side smoothing target — updated when NetworkVariable changes.
-    private Vector3 clientTargetPosition;
 
     private void Awake()
     {
         if (platform != null)
+        {
             startPosition = platform.position;
+        }
+
+        localMotion = CreateStationaryState(startPosition);
     }
 
     public override void OnNetworkSpawn()
     {
-        syncedPosition.OnValueChanged += OnSyncedPositionChanged;
+        base.OnNetworkSpawn();
 
         if (IsServer)
         {
-            syncedPosition.Value = startPosition;
-        }
-        else
-        {
-            // Use scene-baked startPosition — syncedPosition.Value may still be
-            // Vector3.zero if the server's initial tick hasn't arrived yet.
-            clientTargetPosition = startPosition;
-            if (platform != null)
-                platform.position = startPosition;
+            motion.Value = CreateStationaryState(startPosition);
         }
     }
 
-    public override void OnNetworkDespawn()
+    private void Update()
     {
-        syncedPosition.OnValueChanged -= OnSyncedPositionChanged;
-    }
-
-    private void OnSyncedPositionChanged(Vector3 _, Vector3 newPos)
-    {
-        if (IsServer) return;
-        // Update target only — do NOT set position directly.
-        clientTargetPosition = newPos;
-    }
-
-    void Update()
-    {
-        if (IsSpawned && !IsServer)
+        if (platform == null)
         {
-            // Client: smooth movement toward server's position.
-            if (platform != null)
-            {
-                platform.position = Vector3.MoveTowards(
-                    platform.position,
-                    clientTargetPosition,
-                    speed * Time.deltaTime
-                );
-            }
             return;
         }
 
-        // Server: authoritative movement.
-        if (!isTriggered.Value) return;
+        MotionState state = IsSpawned ? motion.Value : localMotion;
+        if (!state.IsMoving)
+        {
+            return;
+        }
 
-        platform.position = Vector2.MoveTowards(
-            platform.position,
-            targetPos.position,
-            speed * Time.deltaTime
-        );
+        double now = GetSynchronizedTime();
+        float progress = EvaluateProgress(state, now);
+        platform.position = Vector3.LerpUnclamped(state.From, state.To, progress);
 
-        if (IsSpawned)
-            syncedPosition.Value = platform.position;
+        if (progress >= 1f && (!IsSpawned || IsServer))
+        {
+            state.From = state.To;
+            state.StartedAt = now;
+            state.Duration = 0f;
+            state.IsMoving = false;
+            SetMotionState(state);
+        }
     }
 
     public void TriggerEvent()
     {
-        if (!IsSpawned) return;
-        TriggerServerRpc();
+        if (platform == null || targetPos == null)
+        {
+            Debug.LogWarning("PlatformSequence: Platform or target position is missing.");
+            return;
+        }
+
+        if (IsMultiplayer())
+        {
+            if (IsSpawned && IsServer)
+            {
+                StartMotion();
+            }
+            else if (IsSpawned)
+            {
+                TriggerRpc();
+            }
+
+            return;
+        }
+
+        StartMotion();
     }
 
-    [ServerRpc(RequireOwnership = false)]
-    private void TriggerServerRpc()
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void TriggerRpc()
     {
-        if (!isTriggered.Value)
-            isTriggered.Value = true;
+        StartMotion();
+    }
+
+    private void StartMotion()
+    {
+        if (IsSpawned && !IsServer)
+        {
+            return;
+        }
+
+        Vector3 from = platform.position;
+        Vector3 to = targetPos.position;
+        float distance = Vector3.Distance(from, to);
+        if (distance <= 0.001f)
+        {
+            platform.position = to;
+            SetMotionState(CreateStationaryState(to));
+            return;
+        }
+
+        SetMotionState(new MotionState
+        {
+            From = from,
+            To = to,
+            StartedAt = GetSynchronizedTime(),
+            Duration = distance / Mathf.Max(0.001f, speed),
+            IsMoving = true
+        });
+    }
+
+    private static float EvaluateProgress(MotionState state, double now)
+    {
+        if (!state.IsMoving || state.Duration <= 0f)
+        {
+            return 1f;
+        }
+
+        return Mathf.Clamp01((float)((now - state.StartedAt) / state.Duration));
+    }
+
+    private MotionState CreateStationaryState(Vector3 position)
+    {
+        return new MotionState
+        {
+            From = position,
+            To = position,
+            StartedAt = GetSynchronizedTime(),
+            Duration = 0f,
+            IsMoving = false
+        };
+    }
+
+    private void SetMotionState(MotionState state)
+    {
+        if (IsSpawned)
+        {
+            if (IsServer)
+            {
+                motion.Value = state;
+            }
+
+            return;
+        }
+
+        localMotion = state;
+    }
+
+    private double GetSynchronizedTime()
+    {
+        return IsSpawned && NetworkManager != null
+            ? NetworkManager.ServerTime.Time
+            : Time.timeAsDouble;
+    }
+
+    private bool IsMultiplayer()
+    {
+        return NetworkManager.Singleton != null
+            && NetworkManager.Singleton.IsConnectedClient;
     }
 }
