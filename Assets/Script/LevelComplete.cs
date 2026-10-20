@@ -273,6 +273,11 @@ public class LevelComplete : NetworkBehaviour
         IsCompleting = true;
         player = targetPlayer;
 
+        // Protect the owning player before the door animation moves it. The
+        // protection remains active across the scene load until PlayerSpawner
+        // has placed and stabilized the player at the next spawn point.
+        player.GetComponent<PlayerSpawner>()?.BeginSpawnProtection();
+
         player.position = new Vector3(transform.position.x, player.position.y, player.position.z);
         playerOffset = player.position - transform.position;
 

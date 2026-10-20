@@ -68,11 +68,16 @@ public class FunctionPanelController : MonoBehaviour
         confirmPanel.SetActive(false);
     }
 
-    public void ConfirmExit()
+    public async void ConfirmExit()
     {
         confirmPanel.SetActive(false);
+        GameData.IsLeavingMatchIntentionally = true;
 
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient)
+        if (NetworkConfig.Instance != null)
+        {
+            await NetworkConfig.Instance.LeaveActiveSessionAsync();
+        }
+        else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
         {
             NetworkManager.Singleton.Shutdown();
         }

@@ -32,19 +32,12 @@ public class TrapTrigger : MonoBehaviour
             return;
         }
 
-        if (!CanRunTrapLogic())
+        if (!CanRunTrapLogic() && !IsLocalOwnedPlayer(collision))
         {
             return;
         }
 
-        enterCount++;
-        playersInside.Add(clientId);
-        playersSeen.Add(clientId);
-
-        if (ShouldActivate())
-        {
-            ActivateActions();
-        }
+        RegisterPlayerEnter(clientId);
     }
 
     private void OnTriggerExit2D(Collider2D collision)
@@ -54,12 +47,24 @@ public class TrapTrigger : MonoBehaviour
             return;
         }
 
-        if (!CanRunTrapLogic())
+        if (!CanRunTrapLogic() && !IsLocalOwnedPlayer(collision))
         {
             return;
         }
 
         playersInside.Remove(clientId);
+    }
+
+    private void RegisterPlayerEnter(ulong clientId)
+    {
+        enterCount++;
+        playersInside.Add(clientId);
+        playersSeen.Add(clientId);
+
+        if (ShouldActivate())
+        {
+            ActivateActions();
+        }
     }
 
     private bool ShouldActivate()
@@ -117,6 +122,17 @@ public class TrapTrigger : MonoBehaviour
         }
 
         return true;
+    }
+
+    private bool IsLocalOwnedPlayer(Collider2D collision)
+    {
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsConnectedClient)
+        {
+            return true;
+        }
+
+        NetworkObject networkObject = collision.GetComponentInParent<NetworkObject>();
+        return networkObject != null && networkObject.IsOwner;
     }
 
     private bool IsPlayer(Collider2D collision, out ulong clientId)

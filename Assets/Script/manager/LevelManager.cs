@@ -28,6 +28,7 @@ public class LevelManager : MonoBehaviour
     public static int DeathCount { get; private set; }
 
     private float halfHeight;
+    private bool handledMatchDisconnect;
 
     private void Awake()
     {
@@ -69,16 +70,35 @@ public class LevelManager : MonoBehaviour
 
     private void OnClientDisconnected(ulong clientId)
     {
-        if (!GameData.IsMultiplayer) return;
-        if (SceneManager.GetActiveScene().name == "Menu") return;
-
-        bool isLocalClient = NetworkManager.Singleton != null
-            && clientId == NetworkManager.Singleton.LocalClientId;
-
-        if (isLocalClient)
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (!GameData.IsMultiplayer || networkManager == null || handledMatchDisconnect)
         {
-            SceneManager.LoadScene("Menu");
+            return;
         }
+
+        if (SceneManager.GetActiveScene().name == "Menu")
+        {
+            return;
+        }
+
+        // The exit button owns this transition already; ignore its shutdown callbacks
+        // so the menu is only loaded once.
+        if (GameData.IsLeavingMatchIntentionally)
+        {
+            return;
+        }
+
+        handledMatchDisconnect = true;
+
+        bool disconnectedClientIsLocal = clientId == networkManager.LocalClientId;
+        bool aTeammateDisconnected = !disconnectedClientIsLocal || !networkManager.IsServer;
+
+        if (aTeammateDisconnected)
+        {
+            GameData.ShowTeammateDisconnectedNotice = true;
+        }
+
+        SceneManager.LoadScene("Menu");
     }
 
     // ── RESPAWN PANEL ─────────────────────────────────────
@@ -101,6 +121,27 @@ public class LevelManager : MonoBehaviour
             DeathCount++;
             skipButton?.SetActive(DeathCount >= 3);
         }
+    }
+
+    public void ShowRespawnPanelAfterDeathShake()
+    {
+        if (respawnPanel == null)
+        {
+            return;
+        }
+
+        CameraShake cameraShake = CameraShake.Instance;
+        if (cameraShake == null)
+        {
+            ShowRespawnPanel(true);
+            return;
+        }
+
+        cameraShake.Shake(
+            cameraShake.DefaultDuration,
+            cameraShake.DefaultMagnitude,
+            () => ShowRespawnPanel(true)
+        );
     }
 
     public void OnSkipClicked()

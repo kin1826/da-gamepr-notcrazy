@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -5,6 +6,11 @@ using UnityEngine.InputSystem;
 public class PlayerMovement : NetworkBehaviour
 {
     public static PlayerMovement LocalPlayer { get; private set; }
+
+    // Co-op players should not physically push each other. Keeping this as
+    // collider-pair ignores (instead of a layer rule) preserves all player
+    // interactions with ground, moving platforms, buttons, triggers and traps.
+    private static readonly HashSet<Collider2D> ActivePlayerColliders = new();
 
     // Set by scene-specific gameplay modifiers. Keeping this here makes both
     // keyboard input and the mobile movement buttons follow the same rule.
@@ -28,6 +34,7 @@ public class PlayerMovement : NetworkBehaviour
     private NetworkVariable<int> facingSignNetwork = new NetworkVariable<int>(1);
 
     private Rigidbody2D rb;
+    private Collider2D[] playerColliders;
     private Vector2 moveInput;
     private Vector2 rawMoveInput;
     private bool isGrounded;
@@ -41,6 +48,15 @@ public class PlayerMovement : NetworkBehaviour
         if (!IsMultiplayer())
         {
             LocalPlayer = this;
+
+            // NetworkRigidbody2D starts unspawned objects as kinematic so that
+            // remote network instances cannot simulate their own physics.
+            // Single-player characters are instantiated without being network
+            // spawned, so explicitly restore normal physics for that mode.
+            if (rb != null)
+            {
+                rb.bodyType = RigidbodyType2D.Dynamic;
+            }
         }
 
         if (rb == null)
@@ -53,7 +69,32 @@ public class PlayerMovement : NetworkBehaviour
             Debug.LogError("PlayerMovement: groundCheck Transform not assigned!");
         }
 
+        IgnoreOtherPlayerCollisions();
         ApplyNoFrictionMaterial();
+    }
+
+    private void IgnoreOtherPlayerCollisions()
+    {
+        playerColliders = GetComponentsInChildren<Collider2D>();
+        ActivePlayerColliders.RemoveWhere(collider => collider == null);
+
+        foreach (Collider2D playerCollider in playerColliders)
+        {
+            if (playerCollider == null || playerCollider.isTrigger)
+            {
+                continue;
+            }
+
+            foreach (Collider2D otherPlayerCollider in ActivePlayerColliders)
+            {
+                if (otherPlayerCollider != null && otherPlayerCollider != playerCollider)
+                {
+                    Physics2D.IgnoreCollision(playerCollider, otherPlayerCollider, true);
+                }
+            }
+
+            ActivePlayerColliders.Add(playerCollider);
+        }
     }
 
     public override void OnNetworkSpawn()
@@ -307,5 +348,21 @@ public class PlayerMovement : NetworkBehaviour
         isRunningNetwork.OnValueChanged -= OnRunningChanged;
         facingSignNetwork.OnValueChanged -= OnFacingChanged;
         base.OnNetworkDespawn();
+    }
+
+    public override void OnDestroy()
+    {
+        if (playerColliders != null)
+        {
+            foreach (Collider2D playerCollider in playerColliders)
+            {
+                if (playerCollider != null)
+                {
+                    ActivePlayerColliders.Remove(playerCollider);
+                }
+            }
+        }
+
+        base.OnDestroy();
     }
 }
