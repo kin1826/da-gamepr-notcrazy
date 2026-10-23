@@ -12,8 +12,18 @@ public class AudioManager : MonoBehaviour
     [Header("Music Clips")]
     public AudioClip[] musicTracks;
 
+    [Tooltip("Optional looped music used in gameplay scenes. Leave empty to keep gameplay silent.")]
+    [SerializeField] private AudioClip gameplayMusicClip;
+    [Range(0f, 1f)]
+    [SerializeField] private float gameplayMusicVolumeScale = 0.25f;
+
     [Header("SFX Clips")]
     public AudioClip[] sfxClips;
+
+    [Tooltip("Optional one-shot played when the gameplay transition curtain closes.")]
+    [SerializeField] private AudioClip transitionPanelSfx;
+    [Range(0f, 1f)]
+    [SerializeField] private float transitionPanelSfxVolumeScale = 0.3f;
 
     [Header("Default Volume")]
     [Range(0f, 1f)] public float musicVolume = 0.5f;
@@ -43,9 +53,11 @@ public class AudioManager : MonoBehaviour
 
         if (musicSource == null) musicSource = gameObject.AddComponent<AudioSource>();
         if (sfxSource == null) sfxSource = gameObject.AddComponent<AudioSource>();
-        musicSource.volume = musicVolume;
-        sfxSource.volume = sfxVolume;
+        musicSource.playOnAwake = false;
         musicSource.loop = true;
+        musicSource.spatialBlend = 0f;
+        ApplyMusicVolume();
+        sfxSource.volume = sfxVolume;
     }
 
     private void OnDestroy()
@@ -58,10 +70,22 @@ public class AudioManager : MonoBehaviour
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
-        // This track is menu ambience. The AudioManager persists for SFX and
-        // settings, but menu music must not follow players into gameplay.
-        if (scene.name != "Menu")
+        if (scene.name == "Menu")
+        {
             StopMusic();
+            return;
+        }
+
+        // Keep the same gameplay track running through level-to-level loads.
+        // A blank clip intentionally leaves gameplay silent instead of carrying
+        // the menu ambience into the game.
+        if (gameplayMusicClip == null)
+        {
+            StopMusic();
+            return;
+        }
+
+        PlayMusicTrack(gameplayMusicClip, true);
     }
 
     private void CreatePersistentAudioRoot()
@@ -75,7 +99,11 @@ public class AudioManager : MonoBehaviour
         persistentManager.musicSource = persistentMusic;
         persistentManager.sfxSource = persistentSfx;
         persistentManager.musicTracks = musicTracks;
+        persistentManager.gameplayMusicClip = gameplayMusicClip;
+        persistentManager.gameplayMusicVolumeScale = gameplayMusicVolumeScale;
         persistentManager.sfxClips = sfxClips;
+        persistentManager.transitionPanelSfx = transitionPanelSfx;
+        persistentManager.transitionPanelSfxVolumeScale = transitionPanelSfxVolumeScale;
         persistentManager.musicVolume = musicVolume;
         persistentManager.sfxVolume = sfxVolume;
 
@@ -89,16 +117,30 @@ public class AudioManager : MonoBehaviour
     {
         if (!IsValidMusic(index)) return;
 
-        musicSource.clip = musicTracks[index];
-        musicSource.Play();
+        PlayMusicTrack(musicTracks[index], false);
     }
 
     public void PlayMusic(AudioClip clip)
     {
         if (clip == null) return;
 
+        PlayMusicTrack(clip, false);
+    }
+
+    private void PlayMusicTrack(AudioClip clip, bool isGameplayTrack)
+    {
+        if (clip == null || musicSource == null) return;
+
+        bool sameTrackAlreadyPlaying = musicSource.clip == clip && musicSource.isPlaying;
         musicSource.clip = clip;
-        musicSource.Play();
+        isGameplayMusic = isGameplayTrack;
+        ApplyMusicVolume();
+
+        // Scene changes between gameplay levels should not restart the music.
+        if (!sameTrackAlreadyPlaying)
+        {
+            musicSource.Play();
+        }
     }
 
     public void StopMusic()
@@ -113,7 +155,17 @@ public class AudioManager : MonoBehaviour
     public void SetMusicVolume(float volume)
     {
         musicVolume = Mathf.Clamp01(volume);
-        musicSource.volume = musicVolume;
+        ApplyMusicVolume();
+    }
+
+    private bool isGameplayMusic;
+
+    private void ApplyMusicVolume()
+    {
+        if (musicSource == null) return;
+
+        float trackScale = isGameplayMusic ? gameplayMusicVolumeScale : 1f;
+        musicSource.volume = musicVolume * trackScale;
     }
 
     // ── SFX ───────────────────────────────────────────────
@@ -130,6 +182,18 @@ public class AudioManager : MonoBehaviour
         if (clip == null) return;
 
         sfxSource.PlayOneShot(clip, sfxVolume);
+    }
+
+    public void PlaySFX(AudioClip clip, float volumeScale)
+    {
+        if (clip == null) return;
+
+        sfxSource.PlayOneShot(clip, sfxVolume * Mathf.Clamp01(volumeScale));
+    }
+
+    public void PlaySceneTransitionSfx()
+    {
+        PlaySFX(transitionPanelSfx, transitionPanelSfxVolumeScale);
     }
 
     public void SetSFXVolume(float volume)

@@ -132,6 +132,8 @@ public class LevelManager : MonoBehaviour
 
     public void ShowRespawnPanelAfterDeathShake()
     {
+        PlayerMovement.LocalPlayer?.PlayDeathSfx();
+
         if (respawnPanel == null)
         {
             return;
@@ -196,6 +198,7 @@ public class LevelManager : MonoBehaviour
         else
         {
             // Single player — unpause then reload with transition.
+            GameData.IsRespawning = true;
             Time.timeScale = 1f;
             respawnPanel?.SetActive(false);
             string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
@@ -209,12 +212,22 @@ public class LevelManager : MonoBehaviour
         Time.timeScale = 1f;
         respawnPanel?.SetActive(false);
         if (transitionPanel != null && topImage != null && bottomImage != null)
-            StartCoroutine(CloseTransition());
+            StartCoroutine(CloseTransition(false));
     }
 
     // ── LOAD LEVEL ────────────────────────────────────────
 
     public void LoadLevel(string sceneName)
+    {
+        StartLevelLoad(sceneName, false);
+    }
+
+    public void LoadLevelAfterCompletion(string sceneName)
+    {
+        StartLevelLoad(sceneName, true);
+    }
+
+    private void StartLevelLoad(string sceneName, bool playCompletionTransitionSfx)
     {
         if (string.IsNullOrEmpty(sceneName))
         {
@@ -227,15 +240,15 @@ public class LevelManager : MonoBehaviour
             UserSession.CommitPendingLevelRewards();
         }
 
-        StartCoroutine(TransitionAndLoad(sceneName));
+        StartCoroutine(TransitionAndLoad(sceneName, playCompletionTransitionSfx));
     }
 
     // ── TRANSITION ────────────────────────────────────────
 
-    private IEnumerator TransitionAndLoad(string sceneName)
+    private IEnumerator TransitionAndLoad(string sceneName, bool playCompletionTransitionSfx)
     {
         if (transitionPanel != null && topImage != null && bottomImage != null)
-            yield return StartCoroutine(CloseTransition());
+            yield return StartCoroutine(CloseTransition(playCompletionTransitionSfx));
 
         Debug.Log($"LevelManager: Loading scene '{sceneName}'");
 
@@ -254,9 +267,13 @@ public class LevelManager : MonoBehaviour
         }
     }
 
-    private IEnumerator CloseTransition()
+    private IEnumerator CloseTransition(bool playSfx)
     {
         transitionPanel.SetActive(true);
+        if (playSfx)
+        {
+            AudioManager.Instance?.PlaySceneTransitionSfx();
+        }
 
         Vector2 topStart = new Vector2(0, halfHeight);
         Vector2 topEnd = new Vector2(0, 0);

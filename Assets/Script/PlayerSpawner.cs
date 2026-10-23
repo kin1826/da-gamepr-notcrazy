@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -141,6 +142,7 @@ public class PlayerSpawner : NetworkBehaviour
         yield return new WaitForFixedUpdate();
 
         SetVisible(true);
+        PlayRespawnSfxIfPending();
 
         if (spawnProtectionDuration > 0f)
         {
@@ -149,6 +151,50 @@ public class PlayerSpawner : NetworkBehaviour
 
         EndSpawnProtection();
         spawnRoutine = null;
+    }
+
+    private void PlayRespawnSfxIfPending()
+    {
+        if (!GameData.IsRespawning) return;
+
+        GameData.IsRespawning = false;
+        GetComponent<PlayerMovement>()?.PlayRespawnSfx();
+
+        if (IsSpawned && IsOwner)
+        {
+            RelayRespawnSfxServerRpc();
+        }
+    }
+
+    [ServerRpc]
+    private void RelayRespawnSfxServerRpc(ServerRpcParams rpcParams = default)
+    {
+        if (NetworkManager.Singleton == null || rpcParams.Receive.SenderClientId != OwnerClientId)
+        {
+            return;
+        }
+
+        List<ulong> recipients = new List<ulong>();
+        foreach (ulong clientId in NetworkManager.Singleton.ConnectedClientsIds)
+        {
+            if (clientId != OwnerClientId)
+            {
+                recipients.Add(clientId);
+            }
+        }
+
+        if (recipients.Count == 0) return;
+
+        RelayRespawnSfxClientRpc(new ClientRpcParams
+        {
+            Send = new ClientRpcSendParams { TargetClientIds = recipients.ToArray() }
+        });
+    }
+
+    [ClientRpc]
+    private void RelayRespawnSfxClientRpc(ClientRpcParams clientRpcParams = default)
+    {
+        GetComponent<PlayerMovement>()?.PlayRespawnSfx();
     }
 
     private void TryMoveToSpawnPoint()

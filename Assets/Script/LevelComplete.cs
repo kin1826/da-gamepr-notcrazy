@@ -296,6 +296,7 @@ public class LevelComplete : NetworkBehaviour
             movement.enabled = false;
         }
 
+        GetComponentInParent<LevelCompleteDoorGroup>()?.PlayDoorStartSfxOnce();
         StartCoroutine(SlideDown());
         StartCoroutine(RestoreCompletionAfterDelay());
     }
@@ -388,7 +389,7 @@ public class LevelComplete : NetworkBehaviour
             yield break;
         }
 
-        LevelManager.Instance.LoadLevel(target);
+        LevelManager.Instance.LoadLevelAfterCompletion(target);
 
         yield break;
     }

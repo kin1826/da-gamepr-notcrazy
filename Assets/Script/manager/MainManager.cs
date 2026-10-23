@@ -131,6 +131,7 @@ public class MainManager : MonoBehaviour
 
     private void Start()
     {
+        GameData.IsRespawning = false;
         NetworkConfig.EnsureInstance();
         ValidateReferences();
 
