@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class AudioManager : MonoBehaviour
 {
@@ -22,15 +23,64 @@ public class AudioManager : MonoBehaviour
     {
         if (Instance != null && Instance != this)
         {
-            Destroy(gameObject);
+            Destroy(this);
+            return;
+        }
+
+        // The menu's AudioManager currently shares a GameObject with the
+        // scene-owned LobbyManager/NetworkObject. Keep audio alive without
+        // moving that network object into DontDestroyOnLoad.
+        if (GetComponent<LobbyManager>() != null)
+        {
+            CreatePersistentAudioRoot();
             return;
         }
 
         Instance = this;
+        DontDestroyOnLoad(gameObject);
 
+        SceneManager.sceneLoaded += OnSceneLoaded;
+
+        if (musicSource == null) musicSource = gameObject.AddComponent<AudioSource>();
+        if (sfxSource == null) sfxSource = gameObject.AddComponent<AudioSource>();
         musicSource.volume = musicVolume;
         sfxSource.volume = sfxVolume;
         musicSource.loop = true;
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance != this) return;
+
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+        Instance = null;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        // This track is menu ambience. The AudioManager persists for SFX and
+        // settings, but menu music must not follow players into gameplay.
+        if (scene.name != "Menu")
+            StopMusic();
+    }
+
+    private void CreatePersistentAudioRoot()
+    {
+        GameObject root = new GameObject("PersistentAudioManager");
+        root.SetActive(false);
+
+        AudioSource persistentMusic = root.AddComponent<AudioSource>();
+        AudioSource persistentSfx = root.AddComponent<AudioSource>();
+        AudioManager persistentManager = root.AddComponent<AudioManager>();
+        persistentManager.musicSource = persistentMusic;
+        persistentManager.sfxSource = persistentSfx;
+        persistentManager.musicTracks = musicTracks;
+        persistentManager.sfxClips = sfxClips;
+        persistentManager.musicVolume = musicVolume;
+        persistentManager.sfxVolume = sfxVolume;
+
+        root.SetActive(true);
+        Destroy(this);
     }
 
     // ── MUSIC ──────────────────────────────────────────────
@@ -51,7 +101,10 @@ public class AudioManager : MonoBehaviour
         musicSource.Play();
     }
 
-    public void StopMusic() => musicSource.Stop();
+    public void StopMusic()
+    {
+        if (musicSource != null) musicSource.Stop();
+    }
 
     public void PauseMusic() => musicSource.Pause();
 

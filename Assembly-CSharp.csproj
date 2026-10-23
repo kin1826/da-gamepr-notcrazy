@@ -90,6 +90,7 @@
     <Compile Include="Assets/Script/LevelSelectManager.cs" />
     <Compile Include="Assets/Script/core/DinoSelectButton.cs" />
     <Compile Include="Assets/Script/NetworkConfig.cs" />
+    <Compile Include="Assets/Script/LevelRewardHud.cs" />
     <Compile Include="Assets/Script/manager/LobbyManager.cs" />
     <Compile Include="Assets/Script/NetworkSetup.cs" />
     <Compile Include="Assets/Script/utils/CeilingJumpModifier.cs" />

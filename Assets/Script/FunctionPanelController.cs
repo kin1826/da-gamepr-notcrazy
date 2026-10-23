@@ -82,6 +82,7 @@ public class FunctionPanelController : MonoBehaviour
             NetworkManager.Singleton.Shutdown();
         }
 
+        UserSession.CommitPendingLevelRewards();
         SceneManager.LoadScene("Menu");
 
         

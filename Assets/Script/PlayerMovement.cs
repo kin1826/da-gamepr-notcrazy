@@ -271,6 +271,12 @@ public class PlayerMovement : NetworkBehaviour
             LevelComplete.ServerHandlePlayerExit(rpcParams.Receive.SenderClientId, groupId);
     }
 
+    [ClientRpc]
+    public void GrantLevelRewardClientRpc(int amount, string rewardEventId)
+    {
+        UserSession.QueueLevelReward(amount, rewardEventId);
+    }
+
     [ServerRpc]
     private void SetRunningServerRpc(bool value)
     {

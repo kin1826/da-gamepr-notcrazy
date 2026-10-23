@@ -25,6 +25,8 @@ public class LevelManager : MonoBehaviour
     public GameObject skipChoicePanel;
     public GameObject adsPanel;
 
+    public const int LevelCompletionReward = 10;
+
     public static int DeathCount { get; private set; }
 
     private float halfHeight;
@@ -42,6 +44,10 @@ public class LevelManager : MonoBehaviour
 
     private void Start()
     {
+        if (GetComponent<LevelRewardHud>() == null)
+        {
+            gameObject.AddComponent<LevelRewardHud>();
+        }
         Time.timeScale = 1f;
         halfHeight = Screen.height / 2f;
         skipButton?.SetActive(DeathCount >= 3);
@@ -98,6 +104,7 @@ public class LevelManager : MonoBehaviour
             GameData.ShowTeammateDisconnectedNotice = true;
         }
 
+        UserSession.CommitPendingLevelRewards();
         SceneManager.LoadScene("Menu");
     }
 
@@ -213,6 +220,11 @@ public class LevelManager : MonoBehaviour
         {
             Debug.LogError("LevelManager: sceneName is null or empty");
             return;
+        }
+
+        if (sceneName == "Menu")
+        {
+            UserSession.CommitPendingLevelRewards();
         }
 
         StartCoroutine(TransitionAndLoad(sceneName));
