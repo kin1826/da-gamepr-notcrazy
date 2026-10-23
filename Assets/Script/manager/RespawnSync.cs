@@ -68,7 +68,7 @@ public class RespawnSync : NetworkBehaviour
         float duration = cameraShake != null ? cameraShake.DefaultDuration : 0.3f;
         float magnitude = cameraShake != null ? cameraShake.DefaultMagnitude : 0.2f;
         Debug.Log($"[RespawnSync] TriggerShowPanel for client {dyingClientId}");
-        BeginDeathShakeClientRpc(duration, magnitude);
+        BeginDeathShakeClientRpc(dyingClientId, duration, magnitude);
         StartCoroutine(DeathShakeTimeout(duration + 2f));
 
         if (pendingDeathShakeClients.Count == 0)
@@ -80,8 +80,10 @@ public class RespawnSync : NetworkBehaviour
     // ── CLIENT RPC ────────────────────────────────────────────────────────────
 
     [ClientRpc]
-    private void BeginDeathShakeClientRpc(float duration, float magnitude)
+    private void BeginDeathShakeClientRpc(ulong dyingClientId, float duration, float magnitude)
     {
+        PlayerMovement.FindForClient(dyingClientId)?.PlayDeathSfx();
+
         CameraShake cameraShake = CameraShake.Instance;
         if (cameraShake == null)
         {
@@ -176,6 +178,7 @@ public class RespawnSync : NetworkBehaviour
     [ClientRpc]
     private void DoReloadClientRpc()
     {
+        GameData.IsRespawning = true;
         LevelManager.Instance?.PlayCloseTransitionOnly();
     }
 

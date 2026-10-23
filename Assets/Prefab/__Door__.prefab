@@ -50,6 +50,8 @@ MonoBehaviour:
   primaryDoor: {fileID: 7460004672978594016}
   secondaryDoor: {fileID: 2558208853682609869}
   hideSecondaryDoorInSingle: 1
+  doorStartSfx: {fileID: 8300000, guid: b4d19f1766baa409ebe4065898e2f74c, type: 3}
+  doorStartSfxVolume: 0.3
 --- !u!1001 &861707201570542197
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -286,7 +288,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 2051154340
+  GlobalObjectIdHash: 423431686
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1

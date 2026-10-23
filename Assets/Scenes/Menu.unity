@@ -22095,8 +22095,12 @@ MonoBehaviour:
   sfxSource: {fileID: 1612013404}
   musicTracks:
   - {fileID: 8300000, guid: 79927a69120455b4b9b876e1ebd6391c, type: 3}
+  gameplayMusicClip: {fileID: 8300000, guid: 158d5dc4695f841ac9b6c48a300bc654, type: 3}
+  gameplayMusicVolumeScale: 0.25
   sfxClips:
   - {fileID: 8300000, guid: 7a74856b1cf54304481ca59e0b8d69e9, type: 3}
+  transitionPanelSfx: {fileID: 8300000, guid: 8e97477fe7af74734bc8c6d2597d7e83, type: 3}
+  transitionPanelSfxVolumeScale: 0.3
   musicVolume: 0.367
   sfxVolume: 1
 --- !u!82 &1612013404

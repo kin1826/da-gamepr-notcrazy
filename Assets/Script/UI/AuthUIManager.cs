@@ -72,7 +72,7 @@ public class AuthUIManager : MonoBehaviour
         if (user == null) return;
 
         profileName.text  = user.name;
-        profileEmail.text = UserSession.IsGuest ? "Chế độ khách" : user.email;
+        profileEmail.text = UserSession.IsGuest ? "Guest Mode" : user.email;
         SetPanel(profileSubPanel);
     }
 

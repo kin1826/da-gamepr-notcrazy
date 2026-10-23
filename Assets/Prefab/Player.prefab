@@ -163,6 +163,7 @@ GameObject:
   - component: {fileID: 5445454174555344233}
   - component: {fileID: 7249889057451694591}
   - component: {fileID: -4931404599778537347}
+  - component: {fileID: 8716238491357024681}
   m_Layer: 0
   m_Name: Player
   m_TagString: Player
@@ -224,7 +225,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
   GlobalObjectIdHash: 1453497324
   InScenePlacedSourceGlobalObjectIdHash: 1453497324
@@ -262,6 +263,14 @@ MonoBehaviour:
     m_Bits: 64
   useNoFrictionMaterial: 1
   animator: {fileID: 7126670436393045290}
+  characterAudioSource: {fileID: 8716238491357024681}
+  footstepSfx: {fileID: 0}
+  jumpSfx: {fileID: 8300000, guid: a64c9d20d33d4d41a7ea4dca5f2d8b71, type: 3}
+  deathSfx: {fileID: 8300000, guid: 21bbb539c79fb425bb3bf5d03d4146c2, type: 3}
+  respawnSfx: {fileID: 8300000, guid: f1162225eef7e4524881015bf2f8f4d6, type: 3}
+  localPlayerSfxVolume: 0.5
+  teammateSfxVolume: 0.2
+  footstepInterval: 0.32
 --- !u!70 &6135180483399022809
 CapsuleCollider2D:
   m_ObjectHideFlags: 0
@@ -331,6 +340,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerSpawner
   ShowTopMostFoldoutHeaderGroup: 1
+  spawnProtectionDuration: 0.15
 --- !u!114 &5445454174555344233
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -424,3 +434,100 @@ MonoBehaviour:
   m_DefaultActionMap: Player
   m_SplitScreenIndex: -1
   m_Camera: {fileID: 0}
+--- !u!82 &8716238491357024681
+AudioSource:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8840192294911795043}
+  m_Enabled: 1
+  serializedVersion: 4
+  OutputAudioMixerGroup: {fileID: 0}
+  m_audioClip: {fileID: 0}
+  m_Resource: {fileID: 0}
+  m_PlayOnAwake: 0
+  m_Volume: 1
+  m_Pitch: 1
+  Loop: 0
+  Mute: 0
+  Spatialize: 0
+  SpatializePostEffects: 0
+  Priority: 128
+  DopplerLevel: 0
+  MinDistance: 1
+  MaxDistance: 500
+  Pan2D: 0
+  rolloffMode: 0
+  BypassEffects: 0
+  BypassListenerEffects: 0
+  BypassReverbZones: 0
+  rolloffCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  panLevelCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  spreadCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  reverbZoneMixCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4

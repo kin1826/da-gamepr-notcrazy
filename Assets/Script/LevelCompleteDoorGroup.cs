@@ -10,7 +10,23 @@ public class LevelCompleteDoorGroup : NetworkBehaviour
     [Header("Single Player")]
     public bool hideSecondaryDoorInSingle = true;
 
+    [Header("Audio")]
+    [SerializeField] private AudioClip doorStartSfx;
+    [Range(0f, 1f)] [SerializeField] private float doorStartSfxVolume = 0.3f;
+
     private NetworkVariable<bool> secondaryDoorVisible = new NetworkVariable<bool>(false);
+    private bool doorStartSfxPlayed;
+
+    public void PlayDoorStartSfxOnce()
+    {
+        if (doorStartSfxPlayed) return;
+
+        doorStartSfxPlayed = true;
+        if (doorStartSfx != null)
+        {
+            AudioManager.Instance?.PlaySFX(doorStartSfx, doorStartSfxVolume);
+        }
+    }
 
     private void Start()
     {

@@ -151,7 +151,7 @@ public static class UserSession
         {
             id           = 0,
             email        = "",
-            name         = "Khách",
+            name         = "Guest",
             token        = "",
             highestLevel = 1,
             gold         = SaveManager.Data.savedGuestGold

@@ -30,6 +30,16 @@ public class PlayerMovement : NetworkBehaviour
 
     [SerializeField] private Animator animator;
 
+    [Header("Character Audio")]
+    [SerializeField] private AudioSource characterAudioSource;
+    [SerializeField] private AudioClip footstepSfx;
+    [SerializeField] private AudioClip jumpSfx;
+    [SerializeField] private AudioClip deathSfx;
+    [SerializeField] private AudioClip respawnSfx;
+    [Range(0f, 1f)] [SerializeField] private float localPlayerSfxVolume = 0.5f;
+    [Range(0f, 1f)] [SerializeField] private float teammateSfxVolume = 0.2f;
+    [Min(0.1f)] [SerializeField] private float footstepInterval = 0.32f;
+
     private NetworkVariable<bool> isRunningNetwork = new NetworkVariable<bool>(false);
     private NetworkVariable<int> facingSignNetwork = new NetworkVariable<int>(1);
 
@@ -40,6 +50,23 @@ public class PlayerMovement : NetworkBehaviour
     private bool isGrounded;
     private bool lastRunning;
     private int lastFacingSign = 1;
+    private float footstepElapsed;
+
+    private void Awake()
+    {
+        if (characterAudioSource == null)
+        {
+            characterAudioSource = GetComponent<AudioSource>();
+        }
+
+        if (characterAudioSource != null)
+        {
+            characterAudioSource.playOnAwake = false;
+            characterAudioSource.loop = false;
+            characterAudioSource.spatialBlend = 0f;
+            characterAudioSource.dopplerLevel = 0f;
+        }
+    }
 
     private void Start()
     {
@@ -189,24 +216,35 @@ public class PlayerMovement : NetworkBehaviour
         if (FlappyJumpModifier.TryGetFlapVelocity(out float flapVelocity))
         {
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, flapVelocity);
+            if (flapVelocity > 0f) PlayJumpSfx();
             return;
         }
 
         if (CeilingJumpModifier.TryGetJumpVelocity(this, rb, out float ceilingJumpVelocity))
         {
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, ceilingJumpVelocity);
+            if (ceilingJumpVelocity > 0f) PlayJumpSfx();
             return;
         }
 
         rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
+        if (jumpForce > 0f) PlayJumpSfx();
     }
 
     private void Update()
     {
-        if (!HasLocalControl()) return;
-        if (rb == null || groundCheck == null) return;
+        if (groundCheck != null)
+        {
+            isGrounded = Physics2D.OverlapCircle(groundCheck.position, groundRadius, groundLayer);
+        }
 
-        isGrounded = Physics2D.OverlapCircle(groundCheck.position, groundRadius, groundLayer);
+        if (!HasLocalControl())
+        {
+            UpdateFootstepSfx(isRunningNetwork.Value);
+            return;
+        }
+
+        if (rb == null || groundCheck == null) return;
 
         float speed = Mathf.Abs(moveInput.x);
         bool isRunning = speed > 0.1f;
@@ -217,6 +255,7 @@ public class PlayerMovement : NetworkBehaviour
         }
 
         ApplyRunning(isRunning);
+        UpdateFootstepSfx(isRunning);
         if (isRunning != lastRunning)
         {
             lastRunning = isRunning;
@@ -248,6 +287,107 @@ public class PlayerMovement : NetworkBehaviour
         if (rb == null) return;
 
         rb.linearVelocity = new Vector2(moveInput.x * moveSpeed, rb.linearVelocity.y);
+    }
+
+    private void UpdateFootstepSfx(bool isMoving)
+    {
+        if (!isMoving || !isGrounded || footstepSfx == null)
+        {
+            footstepElapsed = 0f;
+            return;
+        }
+
+        footstepElapsed += Time.deltaTime;
+        if (footstepElapsed < footstepInterval) return;
+
+        footstepElapsed = 0f;
+        PlayCharacterSfx(footstepSfx);
+    }
+
+    private void PlayJumpSfx()
+    {
+        if (jumpSfx == null) return;
+
+        // Play immediately for the owner so the sound stays in step with input.
+        PlayCharacterSfx(jumpSfx);
+
+        // Jump is an occasional event, so relay it once to the teammate rather
+        // than trying to reproduce it from smoothed remote physics.
+        if (IsMultiplayer())
+        {
+            RelayJumpSfxServerRpc();
+        }
+    }
+
+    public void PlayDeathSfx()
+    {
+        PlayCharacterSfx(deathSfx);
+    }
+
+    public void PlayRespawnSfx()
+    {
+        PlayCharacterSfx(respawnSfx);
+    }
+
+    public static PlayerMovement FindForClient(ulong clientId)
+    {
+        PlayerMovement[] players = FindObjectsByType<PlayerMovement>(
+            FindObjectsInactive.Include,
+            FindObjectsSortMode.None
+        );
+
+        foreach (PlayerMovement player in players)
+        {
+            if (player != null && player.IsSpawned && player.OwnerClientId == clientId)
+            {
+                return player;
+            }
+        }
+
+        return null;
+    }
+
+    private void PlayCharacterSfx(AudioClip clip)
+    {
+        if (clip == null || characterAudioSource == null) return;
+
+        AudioManager audioManager = AudioManager.Instance;
+        if (audioManager != null && audioManager.IsSFXMuted) return;
+
+        float masterSfxVolume = audioManager != null ? audioManager.sfxVolume : 1f;
+        float characterVolume = HasLocalControl() ? localPlayerSfxVolume : teammateSfxVolume;
+        characterAudioSource.PlayOneShot(clip, masterSfxVolume * characterVolume);
+    }
+
+    [ServerRpc]
+    private void RelayJumpSfxServerRpc(ServerRpcParams rpcParams = default)
+    {
+        if (NetworkManager.Singleton == null || rpcParams.Receive.SenderClientId != OwnerClientId)
+        {
+            return;
+        }
+
+        List<ulong> recipients = new List<ulong>();
+        foreach (ulong clientId in NetworkManager.Singleton.ConnectedClientsIds)
+        {
+            if (clientId != OwnerClientId)
+            {
+                recipients.Add(clientId);
+            }
+        }
+
+        if (recipients.Count == 0) return;
+
+        RelayJumpSfxClientRpc(new ClientRpcParams
+        {
+            Send = new ClientRpcSendParams { TargetClientIds = recipients.ToArray() }
+        });
+    }
+
+    [ClientRpc]
+    private void RelayJumpSfxClientRpc(ClientRpcParams clientRpcParams = default)
+    {
+        PlayCharacterSfx(jumpSfx);
     }
 
     // Called by KillZoneReload on the owning client to immediately notify the server
