@@ -1,3 +1,4 @@
+using System;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -28,95 +29,203 @@ public class TrapAction : NetworkBehaviour
     public Collider2D targetCollider;
     public bool colliderState = true;
 
-    private NetworkVariable<bool> isMovingToTarget = new NetworkVariable<bool>(false);
-    private NetworkVariable<bool> isMovingToStart  = new NetworkVariable<bool>(false);
+    private struct MotionState : INetworkSerializable, IEquatable<MotionState>
+    {
+        public Vector3 From;
+        public Vector3 To;
+        public double StartedAt;
+        public float Duration;
+        public bool IsMoving;
 
-    private NetworkVariable<Vector3> syncedPosition = new NetworkVariable<Vector3>(
-        Vector3.zero,
+        public void NetworkSerialize<T>(BufferSerializer<T> serializer)
+            where T : IReaderWriter
+        {
+            serializer.SerializeValue(ref From);
+            serializer.SerializeValue(ref To);
+            serializer.SerializeValue(ref StartedAt);
+            serializer.SerializeValue(ref Duration);
+            serializer.SerializeValue(ref IsMoving);
+        }
+
+        public bool Equals(MotionState other)
+        {
+            return From == other.From
+                && To == other.To
+                && StartedAt.Equals(other.StartedAt)
+                && Duration.Equals(other.Duration)
+                && IsMoving == other.IsMoving;
+        }
+    }
+
+    private readonly NetworkVariable<MotionState> networkMotion = new(
+        default,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server
     );
 
-    private bool hasTriggered;
-    private bool localMovingToTarget;
-    private bool localMovingToStart;
-    private Vector3 startPosition;
+    private readonly NetworkVariable<bool> networkObjectActive = new(
+        true,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
 
-    // Client-side smoothing: store latest server position as target, move toward it each frame.
-    // This prevents the 30Hz teleport jitter caused by instant NetworkVariable application.
-    private Vector3 clientTargetPosition;
+    private readonly NetworkVariable<bool> networkColliderEnabled = new(
+        true,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
+
+    private MotionState localMotion;
+    private bool hasTriggered;
+    private Vector3 startPosition;
 
     private void Awake()
     {
         if (objectToMove == null)
+        {
             objectToMove = transform;
+        }
 
         startPosition = objectToMove.position;
+        localMotion = CreateStationaryState(startPosition);
     }
 
     public override void OnNetworkSpawn()
     {
-        syncedPosition.OnValueChanged += OnSyncedPositionChanged;
+        base.OnNetworkSpawn();
+        networkMotion.OnValueChanged += OnNetworkMotionChanged;
+        networkObjectActive.OnValueChanged += OnNetworkObjectActiveChanged;
+        networkColliderEnabled.OnValueChanged += OnNetworkColliderEnabledChanged;
 
         if (IsServer)
         {
-            syncedPosition.Value = startPosition;
+            networkMotion.Value = CreateStationaryState(startPosition);
+            if (targetObject != null)
+            {
+                networkObjectActive.Value = targetObject.activeSelf;
+            }
+
+            if (targetCollider != null)
+            {
+                networkColliderEnabled.Value = targetCollider.enabled;
+            }
         }
-        else
-        {
-            // Use scene-baked startPosition directly — do NOT trust syncedPosition.Value
-            // here because NGO may not have sent the server's initial value yet (it arrives
-            // on the next tick). Using Value risks a 1-frame flash at Vector3.zero.
-            clientTargetPosition = startPosition;
-            objectToMove.position = startPosition;
-        }
+
+        ApplyReplicatedPosition(networkMotion.Value);
+        SetObjectActive(networkObjectActive.Value);
+        SetColliderEnabled(networkColliderEnabled.Value);
     }
 
     public override void OnNetworkDespawn()
     {
-        syncedPosition.OnValueChanged -= OnSyncedPositionChanged;
-    }
-
-    private void OnSyncedPositionChanged(Vector3 _, Vector3 newPos)
-    {
-        if (IsServer) return;
-        // Store as target for smooth interpolation — do NOT set position directly here.
-        clientTargetPosition = newPos;
+        networkMotion.OnValueChanged -= OnNetworkMotionChanged;
+        networkObjectActive.OnValueChanged -= OnNetworkObjectActiveChanged;
+        networkColliderEnabled.OnValueChanged -= OnNetworkColliderEnabledChanged;
+        base.OnNetworkDespawn();
     }
 
     private void Update()
     {
-        if (IsSpawned && !IsServer)
+        if (objectToMove == null)
         {
-            // Client: smoothly track server's reported position.
-            // Using the same moveSpeed means client mirrors server movement exactly,
-            // with a natural catch-up if network causes brief divergence.
-            objectToMove.position = Vector3.MoveTowards(
-                objectToMove.position,
-                clientTargetPosition,
-                moveSpeed * Time.deltaTime
-            );
             return;
         }
 
-        // Server: authoritative movement.
-        bool movingToTarget = IsSpawned ? isMovingToTarget.Value : localMovingToTarget;
-        bool movingToStart  = IsSpawned ? isMovingToStart.Value  : localMovingToStart;
+        MotionState state = IsSpawned ? networkMotion.Value : localMotion;
+        if (!state.IsMoving)
+        {
+            if (IsSpawned && !IsServer)
+            {
+                objectToMove.position = state.To;
+            }
 
-        if (movingToTarget)
-            MoveTowards(target != null ? target.position : startPosition);
-        else if (movingToStart)
-            MoveTowards(startPosition);
+            return;
+        }
+
+        double now = GetSynchronizedTime();
+        float progress = EvaluateProgress(state, now);
+        objectToMove.position = Vector3.LerpUnclamped(state.From, state.To, progress);
+
+        if (progress < 1f || !HasMotionAuthority())
+        {
+            return;
+        }
+
+        state.From = state.To;
+        state.StartedAt = now;
+        state.Duration = 0f;
+        state.IsMoving = false;
+        SetMotionState(state);
+    }
+
+    private void ApplyReplicatedPosition(MotionState state)
+    {
+        if (objectToMove == null)
+        {
+            return;
+        }
+
+        objectToMove.position = state.IsMoving
+            ? Vector3.LerpUnclamped(
+                state.From,
+                state.To,
+                EvaluateProgress(state, GetSynchronizedTime())
+            )
+            : state.To;
+    }
+
+    private void OnNetworkMotionChanged(MotionState _, MotionState newState)
+    {
+        if (!IsServer)
+        {
+            ApplyReplicatedPosition(newState);
+        }
+    }
+
+    private void OnNetworkObjectActiveChanged(bool _, bool newValue)
+    {
+        if (!IsServer)
+        {
+            SetObjectActive(newValue);
+        }
+    }
+
+    private void OnNetworkColliderEnabledChanged(bool _, bool newValue)
+    {
+        if (!IsServer)
+        {
+            SetColliderEnabled(newValue);
+        }
     }
 
     public void RequestActivate()
     {
         if (IsMultiplayer())
         {
-            if (IsSpawned && IsServer)  { Activate(); return; }
-            if (IsSpawned && !IsServer) { ActivateServerRpc(); return; }
-            if (!NetworkManager.Singleton.IsServer) return;
+            if (!IsSpawned)
+            {
+                if (NetworkManager.Singleton.IsServer)
+                {
+                    Activate();
+                }
+
+                return;
+            }
+
+            if (IsSpawned && IsServer)
+            {
+                Activate();
+                return;
+            }
+
+            if (IsSpawned)
+            {
+                ActivateRpc();
+            }
+
+            return;
         }
+
         Activate();
     }
 
@@ -124,31 +233,71 @@ public class TrapAction : NetworkBehaviour
     {
         if (IsMultiplayer())
         {
-            if (IsSpawned && IsServer)  { Deactivate(); return; }
-            if (IsSpawned && !IsServer) { DeactivateServerRpc(); return; }
-            if (!NetworkManager.Singleton.IsServer) return;
+            if (!IsSpawned)
+            {
+                if (NetworkManager.Singleton.IsServer)
+                {
+                    Deactivate();
+                }
+
+                return;
+            }
+
+            if (IsSpawned && IsServer)
+            {
+                Deactivate();
+                return;
+            }
+
+            if (IsSpawned)
+            {
+                DeactivateRpc();
+            }
+
+            return;
         }
+
         Deactivate();
     }
 
-    [ServerRpc(RequireOwnership = false)]
-    private void ActivateServerRpc() => Activate();
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void ActivateRpc()
+    {
+        Activate();
+    }
 
-    [ServerRpc(RequireOwnership = false)]
-    private void DeactivateServerRpc() => Deactivate();
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void DeactivateRpc()
+    {
+        Deactivate();
+    }
 
     private void Activate()
     {
-        if (triggerOnlyOnce && hasTriggered) return;
+        if (triggerOnlyOnce && hasTriggered)
+        {
+            return;
+        }
+
         hasTriggered = true;
 
         switch (actionType)
         {
-            case ActionType.MoveToTarget:       SetMoving(false, true); break;
-            case ActionType.MoveBackToStart:    SetMoving(true,  false); break;
-            case ActionType.SetObjectActive:    SetObjectActiveNetwork(activeState); break;
-            case ActionType.SetColliderEnabled: SetColliderEnabledNetwork(colliderState); break;
-            case ActionType.ReloadScene:        ReloadScene(); break;
+            case ActionType.MoveToTarget:
+                StartMotion(target != null ? target.position : startPosition);
+                break;
+            case ActionType.MoveBackToStart:
+                StartMotion(startPosition);
+                break;
+            case ActionType.SetObjectActive:
+                SetObjectActiveNetwork(activeState);
+                break;
+            case ActionType.SetColliderEnabled:
+                SetColliderEnabledNetwork(colliderState);
+                break;
+            case ActionType.ReloadScene:
+                ReloadScene();
+                break;
         }
     }
 
@@ -156,88 +305,169 @@ public class TrapAction : NetworkBehaviour
     {
         switch (actionType)
         {
-            case ActionType.MoveToTarget:       SetMoving(true,  false); break;
-            case ActionType.MoveBackToStart:    SetMoving(false, true); break;
-            case ActionType.SetObjectActive:    SetObjectActiveNetwork(!activeState); break;
-            case ActionType.SetColliderEnabled: SetColliderEnabledNetwork(!colliderState); break;
+            case ActionType.MoveToTarget:
+                StartMotion(startPosition);
+                break;
+            case ActionType.MoveBackToStart:
+                StartMotion(target != null ? target.position : startPosition);
+                break;
+            case ActionType.SetObjectActive:
+                SetObjectActiveNetwork(!activeState);
+                break;
+            case ActionType.SetColliderEnabled:
+                SetColliderEnabledNetwork(!colliderState);
+                break;
         }
     }
 
-    private void MoveTowards(Vector3 destination)
+    private void StartMotion(Vector3 destination)
     {
-        if (objectToMove == null) return;
-
-        objectToMove.position = Vector3.MoveTowards(
-            objectToMove.position,
-            destination,
-            moveSpeed * Time.deltaTime
-        );
-
-        if (IsSpawned)
-            syncedPosition.Value = objectToMove.position;
-
-        if (Vector3.Distance(objectToMove.position, destination) < 0.01f)
+        if (objectToMove == null || !HasMotionAuthority())
         {
-            bool wasMovingToStart  = IsSpawned ? isMovingToStart.Value  : localMovingToStart;
-            bool wasMovingToTarget = IsSpawned ? isMovingToTarget.Value : localMovingToTarget;
-
-            if (destination == startPosition)
-                SetMoving(false, wasMovingToTarget);
-            else
-                SetMoving(wasMovingToStart, false);
-        }
-    }
-
-    private void SetMoving(bool moveToStart, bool moveToTarget)
-    {
-        if (IsSpawned)
-        {
-            if (!IsServer) return;
-            isMovingToStart.Value  = moveToStart;
-            isMovingToTarget.Value = moveToTarget;
             return;
         }
-        localMovingToStart  = moveToStart;
-        localMovingToTarget = moveToTarget;
+
+        double now = GetSynchronizedTime();
+        MotionState current = IsSpawned ? networkMotion.Value : localMotion;
+        if (current.IsMoving)
+        {
+            objectToMove.position = Vector3.LerpUnclamped(
+                current.From,
+                current.To,
+                EvaluateProgress(current, now)
+            );
+        }
+
+        Vector3 origin = objectToMove.position;
+        float distance = Vector3.Distance(origin, destination);
+        if (distance <= 0.001f)
+        {
+            objectToMove.position = destination;
+            SetMotionState(CreateStationaryState(destination));
+            return;
+        }
+
+        SetMotionState(new MotionState
+        {
+            From = origin,
+            To = destination,
+            StartedAt = now,
+            Duration = distance / Mathf.Max(0.001f, moveSpeed),
+            IsMoving = true
+        });
+    }
+
+    private static float EvaluateProgress(MotionState state, double now)
+    {
+        if (!state.IsMoving || state.Duration <= 0f)
+        {
+            return 1f;
+        }
+
+        return Mathf.Clamp01((float)((now - state.StartedAt) / state.Duration));
+    }
+
+    private MotionState CreateStationaryState(Vector3 position)
+    {
+        return new MotionState
+        {
+            From = position,
+            To = position,
+            StartedAt = GetSynchronizedTime(),
+            Duration = 0f,
+            IsMoving = false
+        };
+    }
+
+    private void SetMotionState(MotionState state)
+    {
+        if (IsSpawned)
+        {
+            if (IsServer)
+            {
+                networkMotion.Value = state;
+            }
+
+            return;
+        }
+
+        localMotion = state;
+    }
+
+    private bool HasMotionAuthority()
+    {
+        return !IsSpawned || IsServer;
+    }
+
+    private double GetSynchronizedTime()
+    {
+        return IsSpawned && NetworkManager != null
+            ? NetworkManager.ServerTime.Time
+            : Time.timeAsDouble;
     }
 
     private void SetObjectActiveNetwork(bool value)
     {
-        if (IsSpawned && IsServer) { SetObjectActiveClientRpc(value); return; }
+        if (IsSpawned && IsServer)
+        {
+            networkObjectActive.Value = value;
+            SetObjectActive(value);
+            return;
+        }
+
         SetObjectActive(value);
     }
 
     private void SetColliderEnabledNetwork(bool value)
     {
-        if (IsSpawned && IsServer) { SetColliderEnabledClientRpc(value); return; }
+        if (IsSpawned && IsServer)
+        {
+            networkColliderEnabled.Value = value;
+            SetColliderEnabled(value);
+            return;
+        }
+
         SetColliderEnabled(value);
     }
 
     private void SetObjectActive(bool value)
     {
-        if (targetObject != null) targetObject.SetActive(value);
+        if (targetObject != null)
+        {
+            targetObject.SetActive(value);
+        }
     }
 
     private void SetColliderEnabled(bool value)
     {
-        if (targetCollider != null) targetCollider.enabled = value;
+        if (targetCollider != null)
+        {
+            targetCollider.enabled = value;
+        }
     }
-
-    [ClientRpc] private void SetObjectActiveClientRpc(bool value)    => SetObjectActive(value);
-    [ClientRpc] private void SetColliderEnabledClientRpc(bool value) => SetColliderEnabled(value);
 
     private void ReloadScene()
     {
         if (IsMultiplayer())
         {
-            if (!NetworkManager.Singleton.IsServer) return;
+            if (!NetworkManager.Singleton.IsServer)
+            {
+                return;
+            }
+
             NetworkManager.Singleton.SceneManager.LoadScene(
-                SceneManager.GetActiveScene().name, LoadSceneMode.Single);
+                SceneManager.GetActiveScene().name,
+                LoadSceneMode.Single
+            );
             return;
         }
+
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
     private bool IsMultiplayer()
-        => NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient;
+    {
+        return NetworkManager.Singleton != null
+            && NetworkManager.Singleton.IsConnectedClient;
+    }
 }

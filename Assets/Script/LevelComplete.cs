@@ -273,6 +273,11 @@ public class LevelComplete : NetworkBehaviour
         IsCompleting = true;
         player = targetPlayer;
 
+        // Protect the owning player before the door animation moves it. The
+        // protection remains active across the scene load until PlayerSpawner
+        // has placed and stabilized the player at the next spawn point.
+        player.GetComponent<PlayerSpawner>()?.BeginSpawnProtection();
+
         player.position = new Vector3(transform.position.x, player.position.y, player.position.z);
         playerOffset = player.position - transform.position;
 
@@ -353,6 +358,29 @@ public class LevelComplete : NetworkBehaviour
 
         Debug.Log($"LevelComplete: Loading level '{target}'");
         SavePlayerDone();
+
+        int reward = LevelManager.LevelCompletionReward;
+        if (reward > 0)
+        {
+            string rewardEventId = System.Guid.NewGuid().ToString("N");
+            if (IsMultiplayer() && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+            {
+                NetworkObject hostPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
+                PlayerMovement rewardRelay = hostPlayer != null ? hostPlayer.GetComponent<PlayerMovement>() : null;
+                if (rewardRelay != null && rewardRelay.IsSpawned)
+                {
+                    rewardRelay.GrantLevelRewardClientRpc(reward, rewardEventId);
+                }
+                else
+                {
+                    Debug.LogError("LevelComplete: Could not find the host PlayerMovement to distribute the co-op level reward.");
+                }
+            }
+            else
+            {
+                UserSession.QueueLevelReward(reward, rewardEventId);
+            }
+        }
 
         if (LevelManager.Instance == null)
         {

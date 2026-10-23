@@ -135,5 +135,7 @@ Android:
 
 - `MULTIPLAYER_SETUP_GUIDE.md`: tong quan project va multiplayer.
 - `RELAY_SETUP_GUIDE.md`: setup Relay va fix loi join.
+- `Docs/Multiplayer/Quick-Match-Workflow.md`: luong Quick Match, trang thai nut, quy tac cancel va checklist test.
+- `Docs/Multiplayer/Quick-Match-Troubleshooting.md`: cac loi Matchmaker/Relay da gap va cach xu ly.
 - `TRAP_SETUP_GUIDE.md`: setup trap trong hierarchy.
 - `CODE_REVIEW_SUMMARY.md`: trang thai code va nhung gi da lam.

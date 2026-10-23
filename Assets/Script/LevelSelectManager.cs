@@ -2,10 +2,9 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
-public class LevelSelectManager :
-    MonoBehaviour
+public class LevelSelectManager : MonoBehaviour
 {
-    public static LevelSelectManager Instance;
+    public static LevelSelectManager Instance { get; private set; }
 
     public GameObject
         levelButtonPrefab;
@@ -14,15 +13,33 @@ public class LevelSelectManager :
 
     public int totalLevel = 20;
 
-    void Awake()
+    private void Awake()
     {
         Instance = this;
     }
 
+    private void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+    }
+
     public void GenerateAgain()
     {
+        if (content == null)
+        {
+            Debug.LogError("LevelSelectManager: Content reference is missing or has been destroyed.");
+            return;
+        }
+
         for (int i = content.childCount - 1; i >= 0; i--)
-            DestroyImmediate(content.GetChild(i).gameObject);
+        {
+            GameObject child = content.GetChild(i).gameObject;
+            child.SetActive(false);
+            Destroy(child);
+        }
 
         GenerateLevels();
     }

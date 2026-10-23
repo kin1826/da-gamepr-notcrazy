@@ -25,9 +25,12 @@ public class LevelManager : MonoBehaviour
     public GameObject skipChoicePanel;
     public GameObject adsPanel;
 
+    public const int LevelCompletionReward = 10;
+
     public static int DeathCount { get; private set; }
 
     private float halfHeight;
+    private bool handledMatchDisconnect;
 
     private void Awake()
     {
@@ -41,6 +44,10 @@ public class LevelManager : MonoBehaviour
 
     private void Start()
     {
+        if (GetComponent<LevelRewardHud>() == null)
+        {
+            gameObject.AddComponent<LevelRewardHud>();
+        }
         Time.timeScale = 1f;
         halfHeight = Screen.height / 2f;
         skipButton?.SetActive(DeathCount >= 3);
@@ -69,16 +76,36 @@ public class LevelManager : MonoBehaviour
 
     private void OnClientDisconnected(ulong clientId)
     {
-        if (!GameData.IsMultiplayer) return;
-        if (SceneManager.GetActiveScene().name == "Menu") return;
-
-        bool isLocalClient = NetworkManager.Singleton != null
-            && clientId == NetworkManager.Singleton.LocalClientId;
-
-        if (isLocalClient)
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (!GameData.IsMultiplayer || networkManager == null || handledMatchDisconnect)
         {
-            SceneManager.LoadScene("Menu");
+            return;
         }
+
+        if (SceneManager.GetActiveScene().name == "Menu")
+        {
+            return;
+        }
+
+        // The exit button owns this transition already; ignore its shutdown callbacks
+        // so the menu is only loaded once.
+        if (GameData.IsLeavingMatchIntentionally)
+        {
+            return;
+        }
+
+        handledMatchDisconnect = true;
+
+        bool disconnectedClientIsLocal = clientId == networkManager.LocalClientId;
+        bool aTeammateDisconnected = !disconnectedClientIsLocal || !networkManager.IsServer;
+
+        if (aTeammateDisconnected)
+        {
+            GameData.ShowTeammateDisconnectedNotice = true;
+        }
+
+        UserSession.CommitPendingLevelRewards();
+        SceneManager.LoadScene("Menu");
     }
 
     // ── RESPAWN PANEL ─────────────────────────────────────
@@ -101,6 +128,27 @@ public class LevelManager : MonoBehaviour
             DeathCount++;
             skipButton?.SetActive(DeathCount >= 3);
         }
+    }
+
+    public void ShowRespawnPanelAfterDeathShake()
+    {
+        if (respawnPanel == null)
+        {
+            return;
+        }
+
+        CameraShake cameraShake = CameraShake.Instance;
+        if (cameraShake == null)
+        {
+            ShowRespawnPanel(true);
+            return;
+        }
+
+        cameraShake.Shake(
+            cameraShake.DefaultDuration,
+            cameraShake.DefaultMagnitude,
+            () => ShowRespawnPanel(true)
+        );
     }
 
     public void OnSkipClicked()
@@ -172,6 +220,11 @@ public class LevelManager : MonoBehaviour
         {
             Debug.LogError("LevelManager: sceneName is null or empty");
             return;
+        }
+
+        if (sceneName == "Menu")
+        {
+            UserSession.CommitPendingLevelRewards();
         }
 
         StartCoroutine(TransitionAndLoad(sceneName));

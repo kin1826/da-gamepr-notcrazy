@@ -1,3 +1,4 @@
+using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
@@ -37,13 +38,25 @@ public class GameModeVisibility : MonoBehaviour
     /// </summary>
     public void Refresh()
     {
+        // GameData is local-only and can be stale on a joining client.  The
+        // NetworkManager is the source of truth once a network session exists.
+        bool isMultiplayer = GameData.IsMultiplayer;
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager != null && networkManager.IsListening)
+        {
+            isMultiplayer = true;
+        }
+
         bool shouldBeVisible = visibilityMode switch
         {
-            VisibilityMode.SinglePlayerOnly => !GameData.IsMultiplayer,
-            VisibilityMode.MultiplayerOnly => GameData.IsMultiplayer,
+            VisibilityMode.SinglePlayerOnly => !isMultiplayer,
+            VisibilityMode.MultiplayerOnly => isMultiplayer,
             _ => true
         };
 
-        Target.SetActive(shouldBeVisible);
+        if (Target.activeSelf != shouldBeVisible)
+        {
+            Target.SetActive(shouldBeVisible);
+        }
     }
 }

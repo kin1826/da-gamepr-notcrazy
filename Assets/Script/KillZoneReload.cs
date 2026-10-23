@@ -20,6 +20,9 @@ public class KillZoneReload : MonoBehaviour
         if (reloadRequested) return;
         if (LevelComplete.IsCompleting) return;
 
+        PlayerSpawner playerSpawner = collision.GetComponentInParent<PlayerSpawner>();
+        if (playerSpawner != null && playerSpawner.IsSpawnProtected) return;
+
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient)
         {
             NetworkObject netObj = collision.GetComponentInParent<NetworkObject>();
@@ -28,7 +31,6 @@ public class KillZoneReload : MonoBehaviour
             if (NetworkManager.Singleton.IsServer)
             {
                 reloadRequested = true;
-                CameraShake.Instance?.Shake();
                 // Only freeze if this is the host's OWN player.
                 // Remote clients freeze their own player locally (client path below).
                 // Freezing a non-owner copy here leaves it invisible after reload because
@@ -61,9 +63,8 @@ public class KillZoneReload : MonoBehaviour
             // Single player — freeze+hide player then show respawn panel.
             // Destroy would break scene-reload recreation; freeze is enough.
             reloadRequested = true;
-            CameraShake.Instance?.Shake();
             FreezePlayerSingle(collision);
-            LevelManager.Instance?.ShowRespawnPanel();
+            LevelManager.Instance?.ShowRespawnPanelAfterDeathShake();
         }
     }
 

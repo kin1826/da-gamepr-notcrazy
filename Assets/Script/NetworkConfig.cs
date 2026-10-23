@@ -4,8 +4,10 @@ using Unity.Services.Authentication;
 using Unity.Services.Core;
 using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
+using Unity.Services.Multiplayer;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -29,6 +31,11 @@ public class NetworkConfig : MonoBehaviour
     private UnityTransport transport;
     private Task initializeTask;
     private GameObject singlePlayerInstance;
+    private ISession activeSession;
+
+    public string AuthenticationProfileName { get; private set; } = "default";
+
+    public ISession ActiveSession => activeSession;
 
     public static NetworkConfig EnsureInstance()
     {
@@ -126,14 +133,98 @@ public class NetworkConfig : MonoBehaviour
 
         GameData.IsMultiplayer = false;
         GameData.IsHost        = false;
+        GameData.IsLeavingMatchIntentionally = false;
 
         singlePlayerInstance = null;
 
         LevelManager.ResetDeathCount();
 
-        NetworkManager nm = GetComponent<NetworkManager>();
-        if (nm != null && nm.IsListening)
-            nm.Shutdown();
+        _ = LeaveActiveSessionAsync();
+    }
+
+    public async Task EnsureServicesInitializedAsync()
+    {
+        await EnsureUnityServicesInitialized();
+
+        if (UnityServices.State != ServicesInitializationState.Initialized ||
+            !AuthenticationService.Instance.IsSignedIn)
+        {
+            throw new System.InvalidOperationException("Unity Services authentication is not ready for matchmaking.");
+        }
+    }
+
+    public void SetActiveSession(ISession session)
+    {
+        activeSession = session;
+    }
+
+    public async Task<ISession> CreateHostedSessionAsync()
+    {
+        await EnsureServicesInitializedAsync();
+
+        SessionOptions options = new SessionOptions
+        {
+            MaxPlayers = maxPlayers,
+            IsPrivate = false,
+            IsLocked = false
+        }.WithRelayNetwork();
+        ISession session = await MultiplayerService.Instance.CreateSessionAsync(options);
+        activeSession = session;
+        relayCode = session.Code;
+        isHost = true;
+        GameData.IsMultiplayer = true;
+        GameData.IsHost = true;
+        Debug.Log($"[Room] Created discoverable client-hosted session '{session.Id}' with code '{session.Code}'.");
+        return session;
+    }
+
+    public async Task<ISession> JoinHostedSessionByCodeAsync(string code)
+    {
+        await EnsureServicesInitializedAsync();
+
+        ISession session = await MultiplayerService.Instance.JoinSessionByCodeAsync(
+            NormalizeJoinCode(code));
+        activeSession = session;
+        relayCode = session.Code;
+        isHost = false;
+        GameData.IsMultiplayer = true;
+        GameData.IsHost = false;
+        Debug.Log($"[Room] Joined client-hosted session '{session.Id}' with code '{session.Code}'.");
+        return session;
+    }
+
+    /// <summary>
+    /// Leave a Multiplayer Services session, or shut down a legacy Relay room,
+    /// then clear the shared connection state before returning to the menu.
+    /// </summary>
+    public async Task LeaveActiveSessionAsync()
+    {
+        ISession sessionToLeave = activeSession;
+        activeSession = null;
+
+        try
+        {
+            if (sessionToLeave != null)
+            {
+                await sessionToLeave.LeaveAsync();
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"Failed to leave multiplayer session cleanly: {e.Message}");
+        }
+        finally
+        {
+            NetworkManager networkManager = GetComponent<NetworkManager>();
+            if (networkManager != null && networkManager.IsListening)
+            {
+                networkManager.Shutdown();
+            }
+
+            isHost = false;
+            relayCode = string.Empty;
+            joinCode = string.Empty;
+        }
     }
 
     private void SpawnSinglePlayerIfNeeded(Scene scene)
@@ -201,22 +292,62 @@ public class NetworkConfig : MonoBehaviour
     {
         try
         {
+            string requestedProfile = GetAuthenticationProfileName();
             if (UnityServices.State != ServicesInitializationState.Initialized)
             {
-                await UnityServices.InitializeAsync();
+                InitializationOptions initializationOptions = new InitializationOptions()
+                    .SetProfile(requestedProfile);
+                await UnityServices.InitializeAsync(initializationOptions);
+            }
+            else if (AuthenticationService.Instance.Profile != requestedProfile)
+            {
+                Debug.LogWarning(
+                    $"Unity Services was already initialized with profile '{AuthenticationService.Instance.Profile}', " +
+                    $"but this project instance expects '{requestedProfile}'. Initialize UGS only through NetworkConfig.");
             }
 
+            AuthenticationProfileName = AuthenticationService.Instance.Profile;
             if (!AuthenticationService.Instance.IsSignedIn)
             {
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
             }
 
-            Debug.Log("Unity Services initialized and authenticated!");
+            Debug.Log($"Unity Services authenticated. Profile='{AuthenticationProfileName}', " +
+                $"PlayerId='{AuthenticationService.Instance.PlayerId}'.");
         }
         catch (System.Exception e)
         {
             Debug.LogError($"Failed to initialize Unity Services: {e.Message}");
         }
+    }
+
+    private static string GetAuthenticationProfileName()
+    {
+#if UNITY_EDITOR
+        if (ParrelSync.ClonesManager.IsClone())
+        {
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string projectFolder = Path.GetFileName(projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            char[] profileCharacters = projectFolder
+                .Select(character =>
+                    (character >= 'A' && character <= 'Z') ||
+                    (character >= 'a' && character <= 'z') ||
+                    (character >= '0' && character <= '9') ||
+                    character == '_' || character == '-'
+                        ? character
+                        : '_')
+                .ToArray();
+            string safeProjectFolder = new string(profileCharacters);
+
+            if (safeProjectFolder.Length > 27)
+            {
+                safeProjectFolder = safeProjectFolder.Substring(safeProjectFolder.Length - 27);
+            }
+
+            return $"ps_{safeProjectFolder}";
+        }
+#endif
+        return "default";
     }
 
     private Task EnsureUnityServicesInitialized()
@@ -247,6 +378,8 @@ public class NetworkConfig : MonoBehaviour
 
             NetworkManager.Singleton.StartHost();
             isHost = true;
+            GameData.IsMultiplayer = true;
+            GameData.IsHost = true;
 
             Debug.Log($"Relay created! Join code: {relayCode}");
             return relayCode;
@@ -281,8 +414,14 @@ public class NetworkConfig : MonoBehaviour
                 joinAllocation.HostConnectionData
             );
 
-            NetworkManager.Singleton.StartClient();
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.StartClient())
+            {
+                throw new System.InvalidOperationException("Netcode failed to start the Relay client.");
+            }
+
             isHost = false;
+            GameData.IsMultiplayer = true;
+            GameData.IsHost = false;
 
             Debug.Log("Joined relay successfully!");
             return true;
@@ -317,6 +456,8 @@ public class NetworkConfig : MonoBehaviour
     {
         NetworkManager.Singleton.StartHost();
         isHost = true;
+        GameData.IsMultiplayer = true;
+        GameData.IsHost = true;
         Debug.Log("Started hosting directly");
     }
 
@@ -327,6 +468,8 @@ public class NetworkConfig : MonoBehaviour
     {
         NetworkManager.Singleton.StartClient();
         isHost = false;
+        GameData.IsMultiplayer = true;
+        GameData.IsHost = false;
         Debug.Log("Started client directly");
     }
 

@@ -98,7 +98,7 @@ public class ReverseHorizontalControls : MonoBehaviour
         ContactFilter2D filter = new ContactFilter2D().NoFilter();
         filter.useTriggers = true;
 
-        int overlapCount = triggerZone.OverlapCollider(filter, overlapResults);
+        int overlapCount = triggerZone.Overlap(filter, overlapResults);
         for (int i = 0; i < overlapCount; i++)
         {
             Collider2D overlap = overlapResults[i];

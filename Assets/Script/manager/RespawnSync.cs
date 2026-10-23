@@ -13,12 +13,39 @@ public class RespawnSync : NetworkBehaviour
     public static RespawnSync Instance { get; private set; }
 
     private readonly HashSet<ulong> readyPlayers = new();
+    private readonly HashSet<ulong> pendingDeathShakeClients = new();
     private bool panelTriggered = false;
+    private bool respawnPanelShown;
+    private ulong dyingClientId;
 
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+        if (IsServer && NetworkManager != null)
+        {
+            NetworkManager.OnClientDisconnectCallback += OnClientDisconnected;
+        }
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        if (NetworkManager != null)
+        {
+            NetworkManager.OnClientDisconnectCallback -= OnClientDisconnected;
+        }
+
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+
+        base.OnNetworkDespawn();
     }
 
     // ── SERVER ENTRY POINT ────────────────────────────────────────────────────
@@ -28,18 +55,116 @@ public class RespawnSync : NetworkBehaviour
         if (!IsServer) return;
         if (panelTriggered) { Debug.Log("[RespawnSync] TriggerShowPanel blocked (already triggered)"); return; }
         panelTriggered = true;
+        respawnPanelShown = false;
+        this.dyingClientId = dyingClientId;
         readyPlayers.Clear();
+        pendingDeathShakeClients.Clear();
+        foreach (ulong clientId in NetworkManager.ConnectedClientsIds)
+        {
+            pendingDeathShakeClients.Add(clientId);
+        }
+
+        CameraShake cameraShake = CameraShake.Instance;
+        float duration = cameraShake != null ? cameraShake.DefaultDuration : 0.3f;
+        float magnitude = cameraShake != null ? cameraShake.DefaultMagnitude : 0.2f;
         Debug.Log($"[RespawnSync] TriggerShowPanel for client {dyingClientId}");
-        ShowPanelClientRpc(dyingClientId);
+        BeginDeathShakeClientRpc(duration, magnitude);
+        StartCoroutine(DeathShakeTimeout(duration + 2f));
+
+        if (pendingDeathShakeClients.Count == 0)
+        {
+            ShowRespawnPanelToAll();
+        }
     }
 
     // ── CLIENT RPC ────────────────────────────────────────────────────────────
+
+    [ClientRpc]
+    private void BeginDeathShakeClientRpc(float duration, float magnitude)
+    {
+        CameraShake cameraShake = CameraShake.Instance;
+        if (cameraShake == null)
+        {
+            NotifyDeathShakeComplete();
+            return;
+        }
+
+        cameraShake.Shake(duration, magnitude, NotifyDeathShakeComplete);
+    }
 
     [ClientRpc]
     private void ShowPanelClientRpc(ulong dyingClientId)
     {
         bool iAmDead = NetworkManager.Singleton.LocalClientId == dyingClientId;
         LevelManager.Instance?.ShowRespawnPanel(iAmDead);
+    }
+
+    private void NotifyDeathShakeComplete()
+    {
+        if (IsServer)
+        {
+            RegisterDeathShakeComplete(NetworkManager.LocalClientId);
+        }
+        else
+        {
+            DeathShakeCompleteRpc();
+        }
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void DeathShakeCompleteRpc(RpcParams rpcParams = default)
+    {
+        RegisterDeathShakeComplete(rpcParams.Receive.SenderClientId);
+    }
+
+    private void RegisterDeathShakeComplete(ulong clientId)
+    {
+        if (!IsServer || !panelTriggered || respawnPanelShown)
+        {
+            return;
+        }
+
+        pendingDeathShakeClients.Remove(clientId);
+        if (pendingDeathShakeClients.Count == 0)
+        {
+            ShowRespawnPanelToAll();
+        }
+    }
+
+    private IEnumerator DeathShakeTimeout(float timeout)
+    {
+        yield return new WaitForSecondsRealtime(timeout);
+        if (panelTriggered && !respawnPanelShown)
+        {
+            Debug.LogWarning("[RespawnSync] Death shake acknowledgement timed out; showing the respawn panel.");
+            ShowRespawnPanelToAll();
+        }
+    }
+
+    private void ShowRespawnPanelToAll()
+    {
+        if (!IsServer || respawnPanelShown)
+        {
+            return;
+        }
+
+        respawnPanelShown = true;
+        pendingDeathShakeClients.Clear();
+        ShowPanelClientRpc(dyingClientId);
+    }
+
+    private void OnClientDisconnected(ulong clientId)
+    {
+        if (!IsServer || !panelTriggered || respawnPanelShown)
+        {
+            return;
+        }
+
+        pendingDeathShakeClients.Remove(clientId);
+        if (pendingDeathShakeClients.Count == 0)
+        {
+            ShowRespawnPanelToAll();
+        }
     }
 
     [ClientRpc]
