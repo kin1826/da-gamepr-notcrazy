@@ -359,6 +359,29 @@ public class LevelComplete : NetworkBehaviour
         Debug.Log($"LevelComplete: Loading level '{target}'");
         SavePlayerDone();
 
+        int reward = LevelManager.LevelCompletionReward;
+        if (reward > 0)
+        {
+            string rewardEventId = System.Guid.NewGuid().ToString("N");
+            if (IsMultiplayer() && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+            {
+                NetworkObject hostPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
+                PlayerMovement rewardRelay = hostPlayer != null ? hostPlayer.GetComponent<PlayerMovement>() : null;
+                if (rewardRelay != null && rewardRelay.IsSpawned)
+                {
+                    rewardRelay.GrantLevelRewardClientRpc(reward, rewardEventId);
+                }
+                else
+                {
+                    Debug.LogError("LevelComplete: Could not find the host PlayerMovement to distribute the co-op level reward.");
+                }
+            }
+            else
+            {
+                UserSession.QueueLevelReward(reward, rewardEventId);
+            }
+        }
+
         if (LevelManager.Instance == null)
         {
             Debug.LogError("LevelComplete: LevelManager.Instance is null — cannot load next scene.");

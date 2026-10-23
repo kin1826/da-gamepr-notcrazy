@@ -101,11 +101,9 @@ public class ApiManager : MonoBehaviour
 
             GetGold(serverGold =>
             {
-                if (serverGold == UserSession.Current.gold) return;
-                UserSession.Current.gold   = serverGold;
-                SaveManager.Data.savedGold = serverGold;
-                SaveManager.Save();
-                MainManager.Instance?.RefreshGold();
+                int expectedLocalGold = serverGold + SaveManager.Data.unsyncedRewardGold;
+                if (expectedLocalGold == UserSession.Current.gold) return;
+                UserSession.ApplyServerGold(serverGold);
             });
         }
     }

@@ -33,6 +33,7 @@ public class AuthUIManager : MonoBehaviour
     {
         if (UserSession.IsGuest || UserSession.TryRestore())
         {
+            UserSession.CommitPendingLevelRewards();
             ClosePanel();
             MainManager.Instance?.RefreshPlayerName();
             MainManager.Instance?.RefreshGold();
@@ -40,10 +41,7 @@ public class AuthUIManager : MonoBehaviour
             {
                 ApiManager.Instance?.GetGold(serverGold =>
                 {
-                    UserSession.Current.gold   = serverGold;
-                    SaveManager.Data.savedGold = serverGold;
-                    SaveManager.Save();
-                    MainManager.Instance?.RefreshGold();
+                    UserSession.ApplyServerGold(serverGold);
                 });
                 ApiManager.Instance?.StartGoldPolling();
                 DailyRewardPanel.Instance?.TryAutoShow();
@@ -188,6 +186,7 @@ public class AuthUIManager : MonoBehaviour
     public void OnGuestLoginClick()
     {
         UserSession.SetGuest();
+        UserSession.CommitPendingLevelRewards();
         MainManager.Instance?.RefreshPlayerName();
         ClosePanel();
     }
