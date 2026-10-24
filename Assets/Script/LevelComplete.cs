@@ -352,9 +352,10 @@ public class LevelComplete : NetworkBehaviour
         yield return new WaitForSeconds(delayBeforeLoad);
         
         string target = GetNextSceneName();
-        if (string.IsNullOrEmpty(target))
+        if (string.IsNullOrWhiteSpace(target))
         {
-            target = nextSceneName;
+            Debug.LogError("LevelComplete: No next scene is configured (Door 1 for grouped exits), and there is no next scene in Build Settings.");
+            yield break;
         }
 
         Debug.Log($"LevelComplete: Loading level '{target}'");
@@ -396,11 +397,37 @@ public class LevelComplete : NetworkBehaviour
 
     private string GetNextSceneName()
     {
-        if (!string.IsNullOrWhiteSpace(nextSceneName))
+        LevelCompleteDoorGroup doorGroup = GetComponentInParent<LevelCompleteDoorGroup>();
+        if (doorGroup != null)
         {
-            return nextSceneName;
+            // Door 1 is the single source of truth for scene progression. Either
+            // door can trigger co-op completion, but Door 2's scene text must
+            // never determine which level is loaded.
+            LevelComplete primaryDoor = doorGroup.primaryDoor != null
+                ? doorGroup.primaryDoor.GetComponent<LevelComplete>()
+                : null;
+
+            if (primaryDoor != null && !string.IsNullOrWhiteSpace(primaryDoor.nextSceneName))
+            {
+                return primaryDoor.nextSceneName.Trim();
+            }
+
+            Debug.LogWarning("LevelComplete: Door 1 has no next-scene text; falling back to the next scene in Build Settings.");
+            return GetNextSceneFromBuildOrder();
         }
 
+        // Standalone exits that are not part of a two-door group keep using
+        // their own configured destination.
+        if (!string.IsNullOrWhiteSpace(nextSceneName))
+        {
+            return nextSceneName.Trim();
+        }
+
+        return GetNextSceneFromBuildOrder();
+    }
+
+    private static string GetNextSceneFromBuildOrder()
+    {
         int nextBuildIndex = SceneManager.GetActiveScene().buildIndex + 1;
         if (nextBuildIndex >= SceneManager.sceneCountInBuildSettings)
         {
