@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 public class PlayerMovement : NetworkBehaviour
 {
@@ -30,6 +31,9 @@ public class PlayerMovement : NetworkBehaviour
 
     [SerializeField] private Animator animator;
 
+    [Header("Local Player Indicator")]
+    [SerializeField] private Canvas ownerIndicatorCanvas;
+
     [Header("Character Audio")]
     [SerializeField] private AudioSource characterAudioSource;
     [SerializeField] private AudioClip footstepSfx;
@@ -54,6 +58,15 @@ public class PlayerMovement : NetworkBehaviour
 
     private void Awake()
     {
+        if (ownerIndicatorCanvas == null)
+        {
+            ownerIndicatorCanvas = GetComponentInChildren<Canvas>(true);
+        }
+
+        // The marker is local-only. Each peer enables it on its own player
+        // after NGO assigns ownership in OnNetworkSpawn.
+        SetOwnerIndicatorVisible(false);
+
         if (characterAudioSource == null)
         {
             characterAudioSource = GetComponent<AudioSource>();
@@ -129,7 +142,10 @@ public class PlayerMovement : NetworkBehaviour
         if (IsOwner)
         {
             LocalPlayer = this;
+            SceneManager.sceneLoaded += OnOwnerSceneLoaded;
         }
+
+        UpdateOwnerIndicatorVisibility();
 
         isRunningNetwork.OnValueChanged += OnRunningChanged;
         facingSignNetwork.OnValueChanged += OnFacingChanged;
@@ -464,6 +480,24 @@ public class PlayerMovement : NetworkBehaviour
         return NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient;
     }
 
+    private void OnOwnerSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        SetOwnerIndicatorVisible(IsOwner && scene.name != "Menu");
+    }
+
+    private void UpdateOwnerIndicatorVisibility()
+    {
+        SetOwnerIndicatorVisible(IsSpawned && IsOwner && SceneManager.GetActiveScene().name != "Menu");
+    }
+
+    private void SetOwnerIndicatorVisible(bool visible)
+    {
+        if (ownerIndicatorCanvas != null && ownerIndicatorCanvas.gameObject.activeSelf != visible)
+        {
+            ownerIndicatorCanvas.gameObject.SetActive(visible);
+        }
+    }
+
     private void ApplyNoFrictionMaterial()
     {
         if (!useNoFrictionMaterial)
@@ -491,6 +525,13 @@ public class PlayerMovement : NetworkBehaviour
             LocalPlayer = null;
         }
 
+        if (IsOwner)
+        {
+            SceneManager.sceneLoaded -= OnOwnerSceneLoaded;
+        }
+
+        SetOwnerIndicatorVisible(false);
+
         isRunningNetwork.OnValueChanged -= OnRunningChanged;
         facingSignNetwork.OnValueChanged -= OnFacingChanged;
         base.OnNetworkDespawn();
@@ -498,6 +539,8 @@ public class PlayerMovement : NetworkBehaviour
 
     public override void OnDestroy()
     {
+        SceneManager.sceneLoaded -= OnOwnerSceneLoaded;
+
         if (playerColliders != null)
         {
             foreach (Collider2D playerCollider in playerColliders)
